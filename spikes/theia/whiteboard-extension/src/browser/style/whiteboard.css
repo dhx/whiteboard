@@ -1,0 +1,48 @@
+.whiteboard-widget {
+  overflow: hidden;
+}
+
+.whiteboard-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
+.whiteboard-widget:focus {
+  outline: none;
+}
+
+.whiteboard-inline-editor {
+  width: 100%;
+  border: 1px solid var(--theia-editorWidget-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.whiteboard-changed-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+
+.whiteboard-changed-file {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--theia-foreground);
+  font-family: var(--theia-code-font-family);
+  text-align: left;
+  cursor: pointer;
+}
+
+.whiteboard-changed-file:hover {
+  background: var(--theia-list-hoverBackground);
+}
+
+.whiteboard-changed-file-stats {
+  color: var(--theia-descriptionForeground);
+}

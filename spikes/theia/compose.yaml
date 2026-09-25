@@ -1,0 +1,20 @@
+# docker compose -f spikes/theia/compose.yaml up --build
+#
+# Publishes on 127.0.0.1 only: there is no login. Put an authenticating
+# reverse proxy in front before exposing it anywhere else (see README).
+services:
+  whiteboard:
+    build:
+      context: ../..
+      dockerfile: spikes/theia/Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - whiteboard-data:/data
+      # The checkouts reviews point at. Mount read-only if agents author
+      # from outside the container.
+      - ${WHITEBOARD_WORKSPACE:-./workspace}:/workspace
+    restart: unless-stopped
+
+volumes:
+  whiteboard-data:

@@ -1,0 +1,6 @@
+node_modules/
+whiteboard-extension/lib/
+browser-app/lib/
+browser-app/src-gen/
+browser-app/gen-esbuild.*.mjs
+browser-app/esbuild.mjs
