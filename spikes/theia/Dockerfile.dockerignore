@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.git
+**/*.tsbuildinfo
+apps/review-desktop/code-oss
+docs/assets
+spikes/theia/whiteboard-extension/lib
+spikes/theia/browser-app/lib
+spikes/theia/browser-app/src-gen
+spikes/theia/browser-app/gen-esbuild.*.mjs
+spikes/theia/browser-app/esbuild.mjs
+packages/review/bin

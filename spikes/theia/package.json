@@ -1,0 +1,30 @@
+{
+  "name": "@dev.fast/whiteboard-theia-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike: the Whiteboard canvas inside an Eclipse Theia browser app",
+  "license": "MIT",
+  "workspaces": [
+    "whiteboard-extension",
+    "browser-app",
+    "oct-server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace whiteboard-extension && npm run build --workspace browser-app",
+    "start": "npm run start --workspace browser-app",
+    "test": "npm run test --workspace whiteboard-extension"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.6.0": true,
+    "drivelist@12.0.2": true,
+    "keytar@7.9.0": true,
+    "node-pty@1.2.0-beta.12": true,
+    "msgpackr-extract@3.0.4": true,
+    "esbuild@0.28.2": true,
+    "@theia/ffmpeg": false,
+    "puppeteer": false
+  }
+}

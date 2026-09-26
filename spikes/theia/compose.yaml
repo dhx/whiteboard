@@ -1,0 +1,43 @@
+# OCT_JWT_PRIVATE_KEY=$(openssl rand -hex 32) \
+#   docker compose -f spikes/theia/compose.yaml up --build
+#
+# Publishes on 127.0.0.1 only: there is no login in front of Theia. Put an
+# authenticating reverse proxy in front before exposing it (see README).
+services:
+  whiteboard:
+    build:
+      context: ../..
+      dockerfile: spikes/theia/Dockerfile
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # The browser connects to this URL directly, so it must be the address
+      # users reach the collaboration server at, not a container name.
+      COLLABORATION_SERVER_URL: ${COLLABORATION_SERVER_URL:-http://127.0.0.1:8100}
+    volumes:
+      - whiteboard-data:/data
+      # The checkouts reviews point at.
+      - ${WHITEBOARD_WORKSPACE:-./workspace}:/workspace
+    restart: unless-stopped
+
+  # Open Collaboration Tools: live co-editing, cursors and join approval.
+  collaboration:
+    build:
+      context: .
+      dockerfile: oct-server/Dockerfile
+    ports:
+      - "127.0.0.1:8100:8100"
+    environment:
+      OCT_JWT_PRIVATE_KEY: ${OCT_JWT_PRIVATE_KEY:?set OCT_JWT_PRIVATE_KEY to a long random secret}
+      OCT_BASE_URL: ${COLLABORATION_SERVER_URL:-http://127.0.0.1:8100}
+      OCT_CORS_ALLOWED_ORIGINS: ${WHITEBOARD_ORIGIN:-http://127.0.0.1:3000}
+      OCT_REDIRECT_URL_WHITELIST: ${WHITEBOARD_ORIGIN:-http://127.0.0.1:3000}
+      # Unverified names: fine on your own machine, not for a team. Replace
+      # with an identity provider, e.g. Keycloak:
+      #   OCT_OAUTH_KEYCLOAK_URL, OCT_OAUTH_KEYCLOAK_REALM,
+      #   OCT_OAUTH_KEYCLOAK_CLIENTID, OCT_OAUTH_KEYCLOAK_CLIENTSECRET
+      OCT_ACTIVATE_SIMPLE_LOGIN: ${OCT_ACTIVATE_SIMPLE_LOGIN:-true}
+    restart: unless-stopped
+
+volumes:
+  whiteboard-data:

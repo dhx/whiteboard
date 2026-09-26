@@ -1,0 +1,260 @@
+.whiteboard-widget {
+  overflow: hidden;
+}
+
+.whiteboard-canvas-host {
+  position: absolute;
+  inset: 0;
+}
+
+.whiteboard-widget:focus {
+  outline: none;
+}
+
+.whiteboard-inline-editor {
+  width: 100%;
+  border: 1px solid var(--theia-editorWidget-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.whiteboard-changed-files {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+}
+
+.whiteboard-changed-file {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--theia-foreground);
+  font-family: var(--theia-code-font-family);
+  text-align: left;
+  cursor: pointer;
+}
+
+.whiteboard-changed-file:hover {
+  background: var(--theia-list-hoverBackground);
+}
+
+.whiteboard-changed-file-stats {
+  color: var(--theia-descriptionForeground);
+}
+
+/* Structural (diffr) diff view. */
+.whiteboard-sd {
+  /* Long source lines must not widen the canvas pane; cells ellipsize. */
+  contain: inline-size;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 16px 32px;
+  outline: none;
+  color: var(--theia-foreground);
+}
+
+.whiteboard-sd-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.whiteboard-sd-status {
+  color: var(--theia-descriptionForeground);
+  font-size: var(--theia-ui-font-size0);
+}
+
+.whiteboard-sd-status--error {
+  color: var(--theia-errorForeground);
+}
+
+.whiteboard-sd-files {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.whiteboard-sd-file {
+  border: 1px solid var(--theia-editorWidget-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.whiteboard-sd-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--theia-sideBar-background);
+  cursor: pointer;
+  font-family: var(--theia-code-font-family);
+  font-size: var(--theia-code-font-size);
+}
+
+.whiteboard-sd-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.whiteboard-sd-badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--theia-badge-background);
+  color: var(--theia-badge-foreground);
+  font-size: 11px;
+}
+
+.whiteboard-sd-badge--warn {
+  background: var(--theia-editorWarning-foreground);
+}
+
+.whiteboard-sd-counts,
+.whiteboard-sd-badge {
+  flex: none;
+  white-space: nowrap;
+}
+
+.whiteboard-sd-counts {
+  color: var(--theia-descriptionForeground);
+}
+
+.whiteboard-sd-actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.whiteboard-sd-action {
+  padding: 1px 8px;
+  border: 1px solid var(--theia-button-border, transparent);
+  border-radius: 3px;
+  background: var(--theia-button-secondaryBackground);
+  color: var(--theia-button-secondaryForeground);
+  font-family: var(--theia-ui-font-family);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.whiteboard-sd-action:hover {
+  background: var(--theia-button-secondaryHoverBackground);
+}
+
+.whiteboard-sd-note {
+  padding: 8px 12px;
+  color: var(--theia-descriptionForeground);
+}
+
+.whiteboard-sd-table {
+  display: grid;
+  font-family: var(--theia-code-font-family);
+  font-size: var(--theia-code-font-size);
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.whiteboard-sd-table--split {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+}
+
+.whiteboard-sd-table--unified {
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+}
+
+.whiteboard-sd-gutter {
+  padding: 0 8px;
+  min-width: 3ch;
+  text-align: right;
+  color: var(--theia-editorLineNumber-foreground);
+  user-select: none;
+}
+
+.whiteboard-sd-gutter[data-line] {
+  cursor: pointer;
+}
+
+.whiteboard-sd-gutter[data-line]:hover {
+  color: var(--theia-editorLineNumber-activeForeground);
+  text-decoration: underline;
+}
+
+.whiteboard-sd-code {
+  padding: 0 8px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.whiteboard-sd-code--filler {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 4px,
+    var(--theia-editorWidget-border) 4px 5px
+  );
+  opacity: 0.4;
+}
+
+.whiteboard-sd-code--added,
+.whiteboard-sd-code--modified.whiteboard-sd-code--head.whiteboard-sd-code--changed {
+  background: var(--theia-diffEditor-insertedLineBackground);
+}
+
+.whiteboard-sd-code--removed,
+.whiteboard-sd-code--modified.whiteboard-sd-code--base.whiteboard-sd-code--changed {
+  background: var(--theia-diffEditor-removedLineBackground);
+}
+
+.whiteboard-sd-code--head .whiteboard-sd-token {
+  background: var(--theia-diffEditor-insertedTextBackground);
+}
+
+.whiteboard-sd-code--base .whiteboard-sd-token {
+  background: var(--theia-diffEditor-removedTextBackground);
+}
+
+.whiteboard-sd-band {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  border: none;
+  border-block: 1px dashed var(--theia-editorWidget-border);
+  background: var(--theia-editorGutter-background, transparent);
+  color: var(--theia-descriptionForeground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.whiteboard-sd-band:hover {
+  background: var(--theia-list-hoverBackground);
+  color: var(--theia-foreground);
+}
+
+.whiteboard-sd-band-count {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.whiteboard-sd-band-detail {
+  flex-basis: 100%;
+  margin: 0;
+  white-space: pre-wrap;
+}
