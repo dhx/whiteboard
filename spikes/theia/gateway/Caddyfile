@@ -1,0 +1,30 @@
+# The only way in: HTTP basic auth in front of Theia and the collaboration
+# server, on one origin so the browser sends the credentials with every
+# request, including Theia's and OCT's WebSockets. TLS is the platform
+# proxy's job (Coolify's Traefik or Caddy terminates HTTPS in front of this).
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	# Everything except the liveness probe the container health check uses.
+	@protected not path /healthz
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	basic_auth @protected {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	# Open Collaboration Tools, under a prefix: Theia already uses /socket.io.
+	handle_path /oct/* {
+		reverse_proxy collaboration:8100
+	}
+
+	handle {
+		reverse_proxy whiteboard:3000
+	}
+}

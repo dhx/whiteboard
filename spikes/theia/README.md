@@ -31,8 +31,10 @@ Theia widget and implements the canvas bridge on Theia services.
 These are the gaps between this spike and the Theia plan, roughly in the order
 they would need to be closed:
 
-- **No login and no users.** Anyone who can reach the port can read and write
-  every review. See [Security](#security).
+- **No per-user login.** The [Coolify deployment](#deploy-on-coolify) puts one
+  shared basic-auth account in front of everything; the plain `compose.yaml`
+  has none. Either way the review server has no users: everyone who gets in
+  can read and write every review. See [Security](#security).
 - **No syntax highlighting.** Theia ships no TextMate grammars by default; a
   real build adds `@theia/plugin-ext` plus the built-in VS Code language
   extensions (or Open VSX equivalents).
@@ -254,6 +256,61 @@ docker compose -f spikes/theia/compose.yaml up --build
 - Behind a TLS-intercepting proxy, pass its CA with
   `--secret id=ca,src=/path/to/ca.pem`.
 
+## Deploy on Coolify
+
+`coolify.yaml` is a Docker Compose application for
+[Coolify](https://coolify.io) whose only way in is a basic-auth gateway:
+
+```
+Internet ─HTTPS─▶ Coolify proxy (TLS) ─▶ gateway (Caddy, basic auth)
+                                            ├─ /oct/*  ─▶ collaboration:8100
+                                            └─ /*      ─▶ whiteboard:3000
+```
+
+- `gateway` is the only service with a domain. Theia and the collaboration
+  server publish no ports and have no domain; they are reachable only on the
+  application's internal network, from the gateway.
+- Everything is on one origin so the browser sends the basic-auth
+  credentials with every request, WebSockets included. A separate domain for
+  the collaboration server would not get them: the browser only sends cached
+  basic-auth credentials to the origin that asked for them.
+- The collaboration server lives under `/oct` because Theia already uses
+  `/socket.io`. `COLLABORATION_SERVER_URL=/oct` makes the Whiteboard extension
+  point OCT's client at `<page origin>/oct` with socket.io path
+  `/oct/socket.io` (`whiteboard-collaboration.ts`).
+- `/healthz` is the only unauthenticated path; it answers `ok` and proxies
+  nothing.
+
+Set it up:
+
+1. In Coolify, create an Application from this Git repository and branch
+   with the **Docker Compose** build pack. Set **Base Directory** to `/` and
+   **Docker Compose Location** to `/spikes/theia/coolify.yaml`.
+2. Give the `gateway` service a domain, e.g. `https://whiteboard.example.com:80`
+   (the `:80` names the container port). Leave `whiteboard` and
+   `collaboration` without a domain.
+3. Under **Environment Variables**:
+   - `SERVICE_PASSWORD_BASICAUTH` is generated on first load: that is the
+     basic-auth password. The user is `BASIC_AUTH_USER` (default `whiteboard`).
+     The gateway refuses to start with a password shorter than 16 characters.
+   - `SERVICE_HEX_64_OCTJWT` is generated too; it signs collaboration logins.
+   - `WHITEBOARD_CLONE_URLS`: space-separated git URLs cloned into the
+     workspace volume on first start (default: this repository). Private
+     repositories need credentials in the URL or a later manual clone.
+4. Deploy. The Whiteboard image build fetches diffr and takes a few minutes.
+
+Agents author reviews inside the `whiteboard` container, e.g. from a shell on
+the server: `docker exec <whiteboard container> node
+/opt/whiteboard/review/dist/cli.js --state-dir /data/whiteboard api …`, with
+repositories registered by their `/workspace/<name>` path.
+
+Tested locally with the same compose file (images built here, the gateway
+published on a loopback port for the test only): no page, API, `/oct` route
+or WebSocket without the password; Home, a review, code peeks, the semantic
+diff and the Theia editor with it; a two-user collaboration session with
+edits in both directions; ports 3000 and 8100 not reachable from the host.
+Not tested on a Coolify server itself.
+
 ### Authoring from agents
 
 Agents talk to the review server inside the container (with Compose, use
@@ -274,10 +331,13 @@ docker exec -i wb node /opt/whiteboard/review/dist/cli.js --state-dir /data/whit
 
 ## Security
 
-This spike has **no authentication**. It is only safe on `127.0.0.1` (which is
-what `compose.yaml` publishes) or behind an authenticating reverse proxy
-(for example oauth2-proxy or a Keycloak gatekeeper) that you trust to keep
-everyone else out. What it does do:
+`compose.yaml` has **no authentication** and is only safe on `127.0.0.1`
+(which is what it publishes). `coolify.yaml` puts a single shared basic-auth
+account in front of everything, which keeps strangers out but is not per-user
+login: everyone with the password is the same user, and the password travels
+with every request, so only serve it over HTTPS (Coolify's proxy does). For
+real per-user access, replace the gateway with an identity-aware proxy
+(oauth2-proxy, a Keycloak gatekeeper). What the spike does do:
 
 - The review server stays on loopback inside the container; its token never
   reaches the browser.
@@ -288,9 +348,10 @@ everyone else out. What it does do:
   `browser-app/package.json`). Keep it on: in a server deployment, language
   tooling running on an untrusted checkout runs on the server.
 - The collaboration server's default here, simple login, accepts any name:
-  the host's join approval is the only check. Use an identity provider
-  before anyone outside your machine can reach port 8100. Its CORS origins
-  are limited to `WHITEBOARD_ORIGIN`.
+  the host's join approval is the only check. Behind the Coolify gateway only
+  people with the basic-auth password can reach it at all; otherwise use an
+  identity provider before anyone outside your machine can reach port 8100.
+  Its CORS origins are limited to Theia's origin.
 - A guest in a collaboration session is asked to trust the host's workspace;
   the safe answer is no (Restricted Mode).
 - Only the native modules Theia needs may run install scripts

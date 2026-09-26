@@ -19,6 +19,8 @@
     "@theia/monaco": "1.75.0",
     "@theia/monaco-editor-core": "1.108.201",
     "@theia/workspace": "1.75.0",
+    "open-collaboration-protocol": "0.3.0",
+    "socket.io-client": "4.8.4",
     "zod": "4.4.3"
   },
   "devDependencies": {

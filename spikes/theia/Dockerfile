@@ -66,4 +66,5 @@ USER node
 WORKDIR /opt/whiteboard/theia/browser-app
 VOLUME ["/data"]
 EXPOSE 3000
-CMD ["sh", "-c", "exec node lib/backend/main.js /workspace --hostname \"$WHITEBOARD_HOST\" --port \"$PORT\""]
+COPY --chmod=755 spikes/theia/docker-entrypoint.sh /usr/local/bin/whiteboard-theia
+CMD ["whiteboard-theia"]
