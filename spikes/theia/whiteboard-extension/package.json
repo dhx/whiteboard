@@ -8,8 +8,9 @@
     "lib"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.json && node --test \"lib/**/*.test.js\""
+    "generate:protocol": "node ../../../packages/review-protocol/scripts/generate-native-source.mjs src/common/review-protocol.ts",
+    "build": "npm run generate:protocol && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"lib/**/*.test.js\""
   },
   "dependencies": {
     "@theia/core": "1.75.0",

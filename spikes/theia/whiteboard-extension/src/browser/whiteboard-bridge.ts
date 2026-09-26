@@ -1,3 +1,16 @@
+import { DiffUris } from "@theia/core/lib/browser/diff-uris";
+import { OpenerService, open } from "@theia/core/lib/browser/opener-service";
+import { ThemeService } from "@theia/core/lib/browser/theming";
+import { Emitter } from "@theia/core/lib/common/event";
+import { MessageService } from "@theia/core/lib/common/message-service";
+import { getThemeMode } from "@theia/core/lib/common/theme";
+import URI from "@theia/core/lib/common/uri";
+import { inject, injectable } from "@theia/core/shared/inversify";
+import type * as monaco from "@theia/monaco-editor-core";
+import { EditorOption } from "@theia/monaco-editor-core/esm/vs/editor/common/config/editorOptions";
+import { MonacoEditorProvider } from "@theia/monaco/lib/browser/monaco-editor-provider";
+import type { SimpleMonacoEditor } from "@theia/monaco/lib/browser/simple-monaco-editor";
+
 import type {
   ReviewCanvasBridge,
   ReviewDiffFileWire,
@@ -15,26 +28,19 @@ import type {
   ReviewTheme,
   ReviewVerbRequest,
   ReviewVerbResponse,
-} from "@dev.fast/review-protocol" with { "resolution-mode": "import" };
-import { DiffUris } from "@theia/core/lib/browser/diff-uris";
-import { OpenerService, open } from "@theia/core/lib/browser/opener-service";
-import { ThemeService } from "@theia/core/lib/browser/theming";
-import { Emitter } from "@theia/core/lib/common/event";
-import { MessageService } from "@theia/core/lib/common/message-service";
-import { getThemeMode } from "@theia/core/lib/common/theme";
-import URI from "@theia/core/lib/common/uri";
-import { inject, injectable } from "@theia/core/shared/inversify";
-import type * as monaco from "@theia/monaco-editor-core";
-import { EditorOption } from "@theia/monaco-editor-core/esm/vs/editor/common/config/editorOptions";
-import { MonacoEditorProvider } from "@theia/monaco/lib/browser/monaco-editor-provider";
-import type { SimpleMonacoEditor } from "@theia/monaco/lib/browser/simple-monaco-editor";
-
+} from "../common/review-protocol";
 import {
   countMatchesInRanges,
   findPattern,
   hiddenLineRanges,
   visibleLineCount,
 } from "../common/source-ranges";
+import {
+  StructuralDiffSession,
+  type StructuralFileState,
+  readStructuralStream,
+} from "../common/structural-diff-session";
+import { StructuralDiffView } from "./structural-diff-view";
 import { WhiteboardApi } from "./whiteboard-api";
 import {
   anchoredView,
@@ -52,6 +58,24 @@ export interface WhiteboardReviewHost {
   /** The comparison the canvas is showing; sources resolve against it. */
   sourceView(): ReviewSourceView;
   openReview(reviewId: string): void;
+  /** Ties a resource to the canvas's lifetime. */
+  register(disposable: ReviewDisposable): void;
+}
+
+/** What the Theia diff editor needs from a diffr manifest entry. */
+function diffFile(file: StructuralFileState): ReviewDiffFileWire {
+  return {
+    path: file.path,
+    previousPath: file.previousPath,
+    status:
+      file.status === "added" || file.status === "deleted"
+        ? file.status
+        : file.previousPath
+          ? "renamed"
+          : "modified",
+    additions: 0,
+    deletions: 0,
+  };
 }
 
 /**
@@ -393,6 +417,22 @@ export class WhiteboardBridgeFactory {
     );
   }
 
+  /** diffr's structural comparison, streamed through the proxy. */
+  private async *structuralStream(view: ReviewSourceView, signal: AbortSignal) {
+    const response = await this.api.request(
+      `${this.api.serverUrl}/reviews-api/${encodeURIComponent(view.reviewId)}/structural-diff?${sourceQuery(view)}`,
+      { signal },
+    );
+
+    if (!response.ok || !response.body) {
+      const body = await response.text();
+
+      throw new Error(`${response.status} ${body || response.statusText}`);
+    }
+
+    yield* readStructuralStream(response.body);
+  }
+
   private files(view: ReviewSourceView, commit?: string) {
     const query = sourceQuery(commit ? { ...view, commit } : view);
 
@@ -430,15 +470,56 @@ export class WhiteboardBridgeFactory {
       },
     };
 
+    // One diffr run per comparison, shared by every view of it so the
+    // reader's folds survive switching tabs.
+    const sessions = new Map<string, StructuralDiffSession>();
+
+    host.register({
+      dispose: () => {
+        for (const session of sessions.values()) session.dispose();
+      },
+    });
+
+    const structuralSession = (view: ReviewSourceView) => {
+      const key = sourceQuery(view).toString();
+      let session = sessions.get(key);
+
+      if (!session) {
+        session = new StructuralDiffSession((signal) =>
+          this.structuralStream(view, signal),
+        );
+        sessions.set(key, session);
+      }
+
+      return session;
+    };
+
     const diffView: ReviewDiffViewFactory = {
       create: (spec) => {
-        const view = host.sourceView();
+        const base = host.sourceView();
+        const view = spec.scope ? { ...base, commit: spec.scope.commit } : base;
 
-        return new ChangedFilesView(
-          spec,
-          this.files(view, spec.scope?.commit),
-          (file) => this.openDiff(view, file),
-        );
+        return new StructuralDiffView(spec, structuralSession(view), {
+          layout: () => this.diffLayout,
+          setLayout: (layout) => {
+            this.diffLayout = layout;
+            this.diffLayoutChanged.fire(layout);
+          },
+          onDidChangeLayout: (listener) =>
+            this.diffLayoutChanged.event(listener),
+          openSource: (side, path, line) =>
+            void this.openSource(view, side, path, {
+              startLine: line,
+              endLine: line,
+            }),
+          openDiff: (file) => void this.openDiff(view, diffFile(file)),
+          fallback: (container) =>
+            new ChangedFilesView(
+              { ...spec, container },
+              this.files(view),
+              (file) => this.openDiff(view, file),
+            ),
+        });
       },
       files: (scope) => this.files(host.sourceView(), scope?.commit),
     };

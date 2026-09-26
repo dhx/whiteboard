@@ -1,9 +1,3 @@
-import type {
-  ReviewApiSummary,
-  ReviewCanvasContent,
-  ReviewCanvasHandle,
-  ReviewSourceView,
-} from "@dev.fast/review-protocol" with { "resolution-mode": "import" };
 import {
   BaseWidget,
   type Message,
@@ -15,6 +9,12 @@ import {
   postConstruct,
 } from "@theia/core/shared/inversify";
 
+import type {
+  ReviewApiSummary,
+  ReviewCanvasContent,
+  ReviewCanvasHandle,
+  ReviewSourceView,
+} from "../common/review-protocol";
 import { WhiteboardApi } from "./whiteboard-api";
 import { WhiteboardBridgeFactory } from "./whiteboard-bridge";
 import { WhiteboardCanvasLoader } from "./whiteboard-canvas-loader";
@@ -133,11 +133,12 @@ export class WhiteboardWidget extends BaseWidget {
     return {
       kind: "api",
       reviewId,
-      structuralDiffEnabled: false,
+      structuralDiffEnabled: true,
       softwareMapEnabled: true,
       bridge: this.bridges.create(reviewId, wasmUrl, {
         sourceView: () => this.sourceView ?? initialView,
         openReview: (id) => void this.opener.openReview(id),
+        register: (disposable) => this.toDispose.push(disposable),
       }),
       setTitle: (title) => {
         this.title.label = title;

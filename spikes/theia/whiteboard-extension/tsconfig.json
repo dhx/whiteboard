@@ -16,12 +16,7 @@
     "esModuleInterop": true,
     "types": ["node"],
     "rootDir": "src",
-    "outDir": "lib",
-    "paths": {
-      "@dev.fast/review-protocol": [
-        "../../../packages/review-protocol/dist/index.d.ts"
-      ]
-    }
+    "outDir": "lib"
   },
   "include": ["src"]
 }

@@ -1,38 +1,28 @@
-import type {
-  ReviewDiffSide,
-  ReviewSourcePins,
-  ReviewSourceView,
-} from "@dev.fast/review-protocol" with { "resolution-mode": "import" };
 import { Resource, ResourceResolver } from "@theia/core/lib/common/resource";
 import URI from "@theia/core/lib/common/uri";
 import { inject, injectable } from "@theia/core/shared/inversify";
 
+import {
+  type ReviewDiffSide,
+  type ReviewSourceView,
+  reviewSourceAnchor,
+  reviewSourceQuery,
+} from "../common/review-protocol";
 import { WHITEBOARD_SOURCE_SCHEME } from "../common/whiteboard-paths";
 import { WhiteboardApi } from "./whiteboard-api";
 
-/** Mirrors `reviewSourceQuery` in `@dev.fast/review-protocol`. */
+/** The review server's source query for a comparison, as URL parameters. */
 export function sourceQuery(view: ReviewSourceView) {
-  const query = new URLSearchParams({ version: String(view.version) });
+  const query = new URLSearchParams();
 
-  if (view.commit) query.set("commit", view.commit);
-
-  if (view.pins) {
-    query.set("repositoryId", view.pins.repositoryId);
-    query.set("head", view.pins.head);
-
-    if (view.pins.base) query.set("base", view.pins.base);
-  }
+  for (const [key, value] of Object.entries(reviewSourceQuery(view)))
+    if (value !== undefined) query.set(key, String(value));
 
   return query;
 }
 
-/** Mirrors `reviewSourceAnchor`: a reference with its own pins reads there. */
-export function anchoredView(
-  view: ReviewSourceView,
-  pins: ReviewSourcePins | undefined,
-): ReviewSourceView {
-  return pins ? { reviewId: view.reviewId, version: view.version, pins } : view;
-}
+/** A reference with its own pins reads there, not at the review's. */
+export const anchoredView = reviewSourceAnchor;
 
 export function sourceFileRoute(
   view: ReviewSourceView,

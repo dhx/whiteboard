@@ -27,6 +27,15 @@ RUN pnpm install --frozen-lockfile \
  && pnpm --config.inject-workspace-packages=true --filter @dev.fast/review deploy --prod /out/review \
  && cp -r packages/review/app/dist/desktop /out/canvas
 
+# diffr, the semantic diff engine behind the Diff tab: a pinned, checksummed
+# release binary (Linux x64 only). DIFFR=skip builds without it; the Diff tab
+# then falls back to the plain file list.
+ARG DIFFR=required
+RUN if [ "$DIFFR" != skip ]; then \
+      pnpm --filter @dev.fast/review run ensure:diffr --required \
+      && mkdir -p /out/review/bin && cp packages/review/bin/diffr /out/review/bin/diffr; \
+    fi
+
 # The Theia app. Only the approved native modules run install scripts.
 WORKDIR /src/spikes/theia
 RUN npm ci --no-audit --no-fund \

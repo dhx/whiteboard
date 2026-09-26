@@ -1,8 +1,6 @@
-import type { ReviewCanvasModule } from "@dev.fast/review-protocol" with {
-  "resolution-mode": "import",
-};
 import { injectable } from "@theia/core/shared/inversify";
 
+import type { ReviewCanvasModule } from "../common/review-protocol";
 import { WHITEBOARD_CANVAS_PATH } from "../common/whiteboard-paths";
 import { pageUrl } from "./whiteboard-api";
 
