@@ -1,0 +1,14 @@
+{
+  "name": "@dev.fast/whiteboard-oct-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Self-hosted Open Collaboration Tools server for the Theia spike",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node start.mjs"
+  },
+  "dependencies": {
+    "open-collaboration-server": "0.3.1"
+  }
+}

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@dev.fast/whiteboard-theia": "0.0.0",
+    "@theia/collaboration": "1.75.0",
     "@theia/core": "1.75.0",
     "@theia/editor": "1.75.0",
     "@theia/filesystem": "1.75.0",

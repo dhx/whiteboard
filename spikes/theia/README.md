@@ -23,6 +23,7 @@ Theia widget and implements the canvas bridge on Theia services.
 | Diff tab | **Semantic diff** from diffr (see [below](#semantic-diff)); each file also opens in Theia's own read-only diff editor. Falls back to a plain file list when diffr is unavailable. |
 | "Reveal in editor" / "Open diff" from the canvas | Opens Theia editor tabs. |
 | Agents authoring reviews | `whiteboard api` / `whiteboard mcp` against the server in the container (see below). |
+| Live co-editing | [Open Collaboration Tools](#live-collaboration-open-collaboration-tools): shared editors with named cursors, host approval of each guest, self-hosted server. |
 | Container | Multi-stage image; the review server runs as the unprivileged `node` user. |
 
 ## What does not (yet)
@@ -48,6 +49,75 @@ they would need to be closed:
 - **One review server per container.** The server is single-process by design
   (a file lock per state directory), so this is one shared workspace, not
   per-user isolation.
+
+## Live collaboration (Open Collaboration Tools)
+
+The app includes Theia's `@theia/collaboration` extension and a self-hosted
+[Open Collaboration Tools](https://github.com/eclipse-oct/open-collaboration-tools)
+(OCT) server (`oct-server/`, MIT; `compose.yaml` runs it as `collaboration`).
+
+How a session works:
+
+1. The host clicks **Collaborate** in the status bar, **Create New
+   Collaboration Session**, and signs in to the OCT server. An invitation code
+   is copied to the clipboard.
+2. A guest clicks **Collaborate**, **Join Collaboration Session**, enters the
+   code and signs in. The host sees "User '…' wants to join" and allows or
+   denies it.
+3. The guest sees the host's workspace, and must answer a Workspace Trust
+   prompt for it. Both edit the same files with each other's named cursors.
+   The host's copy is what is saved.
+
+Tested with two browsers, locally and in the two containers: session
+creation, join approval, edits in both directions with named cursors, the
+result saved to the host's file, and Whiteboard (review canvas, semantic
+diff) still usable by the guest during the session.
+
+What OCT covers and what it does not:
+
+- **Covered:** files and text editors: co-editing, cursors and selections,
+  the guest browsing the host's workspace. Messages between participants are
+  encrypted with per-session keys (per the protocol's source; not audited
+  here), and the server only relays them.
+- **Not covered: the Whiteboard canvas.** It is a custom widget, not a text
+  editor, so OCT does not share it: no shared scrolling, pointers or
+  selection on a review. In this single-container setup everyone already
+  reads the same reviews, and agent edits appear live for all of them.
+- **No follow mode** in the Theia 1.75 extension (the VS Code extension has
+  one).
+- **Rough edge:** when the host's copy of a file is saved while a guest has
+  it open with edits, the guest gets a "file has been changed on the file
+  system" dialog, although both copies are identical.
+- Sessions live in the OCT server's memory, end when the host leaves, and the
+  server does not scale horizontally.
+
+Agents: OCT ships `open-collaboration-agent` (`oct-agent`), which joins a
+session as a participant, takes `@agent …` prompts written in shared files,
+and proposes changes as diffs the humans accept or reject, through any agent
+that speaks the Agent Client Protocol (for example Claude Code via
+`@zed-industries/claude-code-acp`). It must run in the host's workspace, i.e.
+in the Whiteboard container. **Not tried in this spike.**
+
+Upstream problems found and worked around:
+
+- `@theia/collaboration` 1.75 builds login URLs as `http://host:8100//api/…`;
+  the OCT server answers `404`, so every login fails its CORS preflight.
+  `whiteboard-collaboration.ts` overrides the two methods to pass relative
+  endpoints.
+- `open-collaboration-server` 0.3.1: its `oct-server` bin imports a bundle
+  the npm package does not ship, `--port` always parses to `NaN` (the port is
+  fixed at 8100), and without `OCT_JWT_PRIVATE_KEY` it signs login tokens
+  with a key published in its source. `oct-server/start.mjs` works around the
+  first two and refuses to start without the key.
+
+These are worth reporting upstream.
+
+| Variable | Service | Meaning |
+| --- | --- | --- |
+| `OCT_JWT_PRIVATE_KEY` | collaboration | **Required.** Secret that signs login tokens, e.g. `openssl rand -hex 32`. |
+| `COLLABORATION_SERVER_URL` | both | The OCT server's address **as the browser reaches it** (default `http://127.0.0.1:8100`, no trailing slash). |
+| `WHITEBOARD_ORIGIN` | collaboration | Theia's address as the browser reaches it; the only CORS origin the OCT server accepts (default `http://127.0.0.1:3000`). |
+| `OCT_ACTIVATE_SIMPLE_LOGIN` | collaboration | `true` (default here) lets anyone sign in with any name. Turn off and configure an identity provider for real use (`OCT_OAUTH_KEYCLOAK_*`, `OCT_OAUTH_GITHUB_*`, generic OIDC: see the OCT server README). |
 
 ## How it fits together
 
@@ -127,10 +197,17 @@ pnpm install
 pnpm build
 pnpm --filter @dev.fast/review ensure:diffr --required
 
-# Build and start the Theia app.
+# Build the Theia app.
 cd spikes/theia
 npm ci
 npm run build
+
+# Optional: the collaboration server, in its own terminal.
+OCT_JWT_PRIVATE_KEY=$(openssl rand -hex 32) OCT_ACTIVATE_SIMPLE_LOGIN=true \
+OCT_BASE_URL=http://127.0.0.1:8100 npm start --workspace oct-server
+
+# Start the app.
+COLLABORATION_SERVER_URL=http://127.0.0.1:8100 \
 WHITEBOARD_REVIEW_CLI="$PWD/../../packages/review/dist/cli.js" \
 WHITEBOARD_CANVAS_DIR="$PWD/../../packages/review/app/dist/desktop" \
 WHITEBOARD_STATE_DIR="$HOME/.whiteboard-theia" \
@@ -160,7 +237,13 @@ docker run --rm --name wb -p 127.0.0.1:3000:3000 \
   whiteboard-theia
 ```
 
-or `WHITEBOARD_WORKSPACE=/path/to/checkouts docker compose -f spikes/theia/compose.yaml up --build`.
+or, with the collaboration server:
+
+```sh
+OCT_JWT_PRIVATE_KEY=$(openssl rand -hex 32) \
+WHITEBOARD_WORKSPACE=/path/to/checkouts \
+docker compose -f spikes/theia/compose.yaml up --build
+```
 
 - `/data` holds the review database and Theia settings; keep it on a volume.
 - `/workspace` holds the git checkouts reviews point at. They must be readable
@@ -204,6 +287,12 @@ everyone else out. What it does do:
 - **Workspace Trust is on** (`security.workspace.trust.enabled` in
   `browser-app/package.json`). Keep it on: in a server deployment, language
   tooling running on an untrusted checkout runs on the server.
+- The collaboration server's default here, simple login, accepts any name:
+  the host's join approval is the only check. Use an identity provider
+  before anyone outside your machine can reach port 8100. Its CORS origins
+  are limited to `WHITEBOARD_ORIGIN`.
+- A guest in a collaboration session is asked to trust the host's workspace;
+  the safe answer is no (Restricted Mode).
 - Only the native modules Theia needs may run install scripts
   (`allowScripts` in `package.json`).
 - diffr runs inside the checkout being compared, with the container's

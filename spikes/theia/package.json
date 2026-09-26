@@ -6,7 +6,8 @@
   "license": "MIT",
   "workspaces": [
     "whiteboard-extension",
-    "browser-app"
+    "browser-app",
+    "oct-server"
   ],
   "scripts": {
     "build": "npm run build --workspace whiteboard-extension && npm run build --workspace browser-app",
