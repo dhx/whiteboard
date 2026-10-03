@@ -12,8 +12,15 @@ import {
   type MenuContribution,
   type MenuModelRegistry,
 } from "@theia/core/lib/common/menu";
+import { MessageService } from "@theia/core/lib/common/message-service";
 import { inject, injectable } from "@theia/core/shared/inversify";
 
+import { agentTokenNameSchema } from "../common/agent-token-types";
+import {
+  CreatedAgentTokenDialog,
+  ManageAgentTokensDialog,
+} from "./agent-token-dialogs";
+import { AgentTokensClient } from "./agent-tokens-client";
 import {
   type WhiteboardOpener,
   WhiteboardWidget,
@@ -31,6 +38,16 @@ export const WhiteboardCommands = {
     category: "Whiteboard",
     label: "Open Review by ID…",
   },
+  CREATE_AGENT_TOKEN: {
+    id: "whiteboard.createAgentToken",
+    category: "Whiteboard",
+    label: "Create Agent Token…",
+  },
+  MANAGE_AGENT_TOKENS: {
+    id: "whiteboard.manageAgentTokens",
+    category: "Whiteboard",
+    label: "Manage Agent Tokens",
+  },
 };
 
 @injectable()
@@ -44,6 +61,57 @@ export class WhiteboardContribution
   @inject(WidgetManager) protected readonly widgets!: WidgetManager;
   @inject(ApplicationShell) protected readonly shell!: ApplicationShell;
   @inject(QuickInputService) protected readonly quickInput!: QuickInputService;
+  @inject(MessageService) protected readonly messages!: MessageService;
+  @inject(AgentTokensClient) protected readonly agentTokens!: AgentTokensClient;
+
+  /** Asks for a name and access, creates the token and shows it once. */
+  async createAgentToken() {
+    const name = (
+      await this.quickInput.input({
+        title: "Create Agent Token",
+        prompt: "Name the agent or machine that will use the token.",
+        placeHolder: "e.g. laptop claude code",
+        validateInput: async (value) => {
+          const parsed = agentTokenNameSchema.safeParse(value);
+
+          return parsed.success ? undefined : parsed.error.issues[0]?.message;
+        },
+      })
+    )?.trim();
+
+    if (!name) return;
+
+    const access = await this.quickInput.pick(
+      [
+        {
+          label: "Read and write",
+          description: "author and edit reviews",
+          scope: "write" as const,
+        },
+        {
+          label: "Read only",
+          description: "list and read reviews",
+          scope: "read" as const,
+        },
+      ],
+      { title: `Access for "${name}"` },
+    );
+
+    if (!access) return;
+
+    try {
+      const created = await this.agentTokens.create(name, access.scope);
+
+      await new CreatedAgentTokenDialog(
+        created,
+        this.agentTokens.claudeCommand(created.token),
+      ).open();
+    } catch (error) {
+      void this.messages.error(
+        `Could not create the agent token: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   async openHome() {
     await this.show({});
@@ -77,6 +145,12 @@ export class WhiteboardContribution
 
         if (reviewId) await this.openReview(reviewId);
       },
+    });
+    commands.registerCommand(WhiteboardCommands.CREATE_AGENT_TOKEN, {
+      execute: () => this.createAgentToken(),
+    });
+    commands.registerCommand(WhiteboardCommands.MANAGE_AGENT_TOKENS, {
+      execute: () => new ManageAgentTokensDialog(this.agentTokens).open(),
     });
   }
 

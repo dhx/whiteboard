@@ -39,6 +39,7 @@ export default defineConfig({
     runtime: "src/runtime.ts",
     "server/desktop-host": "src/server/desktop-host.ts",
     "software-map-model": "src/software-map-model.ts",
+    "mcp-http": "src/review-api/mcp-http.ts",
   },
   platform: "node",
   target: "node24",

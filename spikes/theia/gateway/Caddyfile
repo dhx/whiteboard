@@ -1,30 +1,61 @@
-# The only way in: HTTP basic auth in front of Theia and the collaboration
-# server, on one origin so the browser sends the credentials with every
-# request, including Theia's and OCT's WebSockets. TLS is the platform
-# proxy's job (Coolify's Traefik or Caddy terminates HTTPS in front of this).
+# The only way in. Two doors, nothing else:
+#
+# - /whiteboard/mcp, exactly: agents with their own Bearer token. The
+#   gateway does not check the token; the Whiteboard backend does.
+# - everything else: HTTP basic auth, for people. Theia and the collaboration
+#   server share this origin so the browser sends the credentials with every
+#   request, including Theia's and OCT's WebSockets.
+#
+# TLS is the platform proxy's job (Coolify's Traefik, and whatever is in front
+# of it).
 {
 	admin off
 	auto_https off
 }
 
 :80 {
-	# Everything except the liveness probe the container health check uses.
-	@protected not path /healthz
-
+	# The liveness probe the container health check uses.
 	handle /healthz {
 		respond "ok" 200
 	}
 
-	basic_auth @protected {
-		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
-	}
+	# Exact, case-sensitive, before any path cleaning. Caddy's `path` matcher
+	# is case-insensitive and cleans the path, so it would also let
+	# /Whiteboard/mcp, //whiteboard/mcp or /x/../whiteboard/mcp past basic
+	# auth. This expression matches only the decoded path /whiteboard/mcp.
+	@mcp expression `{http.request.uri.path} == "/whiteboard/mcp"`
 
-	# Open Collaboration Tools, under a prefix: Theia already uses /socket.io.
-	handle_path /oct/* {
-		reverse_proxy collaboration:8100
+	handle @mcp {
+		# Only the basic-auth branch below may vouch for a request.
+		request_header -X-Whiteboard-Gateway
+		# Forward the canonical path whatever its encoding was.
+		rewrite * /whiteboard/mcp?{query}
+
+		reverse_proxy whiteboard:3000 {
+			# Stream responses as they are written.
+			flush_interval -1
+		}
 	}
 
 	handle {
-		reverse_proxy whiteboard:3000
+		basic_auth {
+			{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		}
+
+		# Tells the backend this request passed basic auth; replaces any
+		# value a client sent. The backend refuses everything but
+		# /whiteboard/mcp without it.
+		request_header X-Whiteboard-Gateway {$GATEWAY_SECRET}
+		# The backend needs no copy of the password.
+		request_header -Authorization
+
+		# Open Collaboration Tools, under a prefix: Theia already uses /socket.io.
+		handle_path /oct/* {
+			reverse_proxy collaboration:8100
+		}
+
+		handle {
+			reverse_proxy whiteboard:3000
+		}
 	}
 }

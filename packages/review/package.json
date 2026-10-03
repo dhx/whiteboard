@@ -36,6 +36,10 @@
     "./sharing": {
       "types": "./dist/sharing/index.d.ts",
       "import": "./dist/sharing/index.js"
+    },
+    "./mcp-http": {
+      "types": "./dist/mcp-http.d.ts",
+      "import": "./dist/mcp-http.js"
     }
   },
   "publishConfig": {

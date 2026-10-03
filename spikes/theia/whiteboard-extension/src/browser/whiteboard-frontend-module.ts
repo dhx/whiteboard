@@ -6,6 +6,7 @@ import { MenuContribution } from "@theia/core/lib/common/menu";
 import { ResourceResolver } from "@theia/core/lib/common/resource";
 import { ContainerModule } from "@theia/core/shared/inversify";
 
+import { AgentTokensClient } from "./agent-tokens-client";
 import { WhiteboardApi } from "./whiteboard-api";
 import { WhiteboardBridgeFactory } from "./whiteboard-bridge";
 import { WhiteboardCanvasLoader } from "./whiteboard-canvas-loader";
@@ -23,6 +24,7 @@ import "../../src/browser/style/whiteboard.css";
 
 export default new ContainerModule((bind, _unbind, _isBound, rebind) => {
   bind(WhiteboardApi).toSelf().inSingletonScope();
+  bind(AgentTokensClient).toSelf().inSingletonScope();
   rebind(CollaborationFrontendContribution)
     .to(WhiteboardCollaborationContribution)
     .inSingletonScope();

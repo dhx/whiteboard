@@ -258,3 +258,62 @@
   margin: 0;
   white-space: pre-wrap;
 }
+
+/* Agent token dialogs. */
+.whiteboard-token-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+}
+
+.whiteboard-token-label {
+  margin-bottom: 4px;
+  color: var(--theia-descriptionForeground);
+}
+
+.whiteboard-token-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.whiteboard-token-value {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--theia-code-font-family);
+}
+
+pre.whiteboard-token-value {
+  padding: 6px 8px;
+  border: 1px solid var(--theia-editorWidget-border);
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+
+.whiteboard-token-note {
+  color: var(--theia-descriptionForeground);
+}
+
+.whiteboard-token-error {
+  color: var(--theia-errorForeground);
+}
+
+.whiteboard-token-table {
+  border-collapse: collapse;
+}
+
+.whiteboard-token-table th,
+.whiteboard-token-table td {
+  padding: 4px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--theia-editorWidget-border);
+  white-space: nowrap;
+}
+
+.whiteboard-token-revoked td {
+  color: var(--theia-disabledForeground);
+}

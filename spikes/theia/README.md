@@ -259,12 +259,15 @@ docker compose -f spikes/theia/compose.yaml up --build
 ## Deploy on Coolify
 
 `coolify.yaml` is a Docker Compose application for
-[Coolify](https://coolify.io) whose only way in is a basic-auth gateway:
+[Coolify](https://coolify.io) whose only way in is a gateway with two doors:
+basic auth for people, and one exact path for agents with their own token.
 
 ```
-Internet ─HTTPS─▶ Coolify proxy (TLS) ─▶ gateway (Caddy, basic auth)
-                                            ├─ /oct/*  ─▶ collaboration:8100
-                                            └─ /*      ─▶ whiteboard:3000
+Internet ─HTTPS─▶ Coolify proxy (TLS) ─▶ gateway (Caddy)
+                                          ├─ /whiteboard/mcp (exact) ─▶ whiteboard:3000  (agent token)
+                                          └─ basic auth
+                                               ├─ /oct/*  ─▶ collaboration:8100
+                                               └─ /*      ─▶ whiteboard:3000
 ```
 
 - `gateway` is the only service with a domain. Theia and the collaboration
@@ -278,8 +281,19 @@ Internet ─HTTPS─▶ Coolify proxy (TLS) ─▶ gateway (Caddy, basic auth)
   `/socket.io`. `COLLABORATION_SERVER_URL=/oct` makes the Whiteboard extension
   point OCT's client at `<page origin>/oct` with socket.io path
   `/oct/socket.io` (`whiteboard-collaboration.ts`).
-- `/healthz` is the only unauthenticated path; it answers `ok` and proxies
-  nothing.
+- `/healthz` answers `ok` without credentials and proxies nothing.
+- `/whiteboard/mcp`, exactly, skips basic auth: the Whiteboard backend
+  requires an agent token there instead (see
+  [Authoring from agents](#authoring-from-agents)). The gateway matches the
+  raw path with an exact, case-sensitive `expression`, not Caddy's `path`
+  matcher: that one is case-insensitive and cleans the path first, so it
+  would also have let `/Whiteboard/mcp`, `//whiteboard/mcp` and
+  `/x/../whiteboard/mcp` past basic auth.
+- After basic auth the gateway adds a secret header (`X-Whiteboard-Gateway`)
+  and drops the password. The Whiteboard backend refuses every request other
+  than `/whiteboard/mcp` without that header, and every request other than
+  `/whiteboard/mcp` that carries a Bearer token, so an agent token opens
+  nothing else even if a gateway rule were wrong.
 
 Set it up:
 
@@ -294,26 +308,100 @@ Set it up:
      basic-auth password. The user is `BASIC_AUTH_USER` (default `whiteboard`).
      The gateway refuses to start with a password shorter than 16 characters.
    - `SERVICE_HEX_64_OCTJWT` is generated too; it signs collaboration logins.
+   - `SERVICE_HEX_64_GATEWAY` is generated too; it is the secret header the
+     gateway sets after basic auth. Both the gateway and Whiteboard read it;
+     the gateway refuses to start without it.
    - `WHITEBOARD_CLONE_URLS`: space-separated git URLs cloned into the
      workspace volume on first start (default: this repository). Private
      repositories need credentials in the URL or a later manual clone.
 4. Deploy. The Whiteboard image build fetches diffr and takes a few minutes.
 
-Agents author reviews inside the `whiteboard` container, e.g. from a shell on
-the server: `docker exec <whiteboard container> node
-/opt/whiteboard/review/dist/cli.js --state-dir /data/whiteboard api …`, with
-repositories registered by their `/workspace/<name>` path.
+Agents connect over HTTPS with a token of their own; see
+[Authoring from agents](#authoring-from-agents).
 
 Tested locally with the same compose file (images built here, the gateway
 published on a loopback port for the test only): no page, API, `/oct` route
 or WebSocket without the password; Home, a review, code peeks, the semantic
 diff and the Theia editor with it; a two-user collaboration session with
 edits in both directions; ports 3000 and 8100 not reachable from the host.
-Not tested on a Coolify server itself.
+For agent tokens: a token created and revoked in the UI, Claude Code
+connected with the `claude mcp add` line below and calling tools, the next
+request after revocation refused, and the bypass cases below. Not tested on
+a Coolify server itself. Base Directory `/spikes/theia` with Docker Compose
+Location `/coolify.yaml` works as well as the setup above.
 
 ### Authoring from agents
 
-Agents talk to the review server inside the container (with Compose, use
+On a deployment, agents use MCP over HTTPS with a token per agent:
+
+1. In Whiteboard, run **Whiteboard: Create Agent Token…** from the command
+   palette, name it after the agent (e.g. `laptop claude`) and choose
+   **Read and write** or **Read only**.
+2. The dialog shows the token once, with this line to copy:
+
+   ```sh
+   claude mcp add --transport http whiteboard https://whiteboard.example.com/whiteboard/mcp \
+     --header "Authorization: Bearer wbat_…"
+   ```
+
+   Whiteboard keeps only a SHA-256 hash of the token; close the dialog and
+   the token is gone. Create a new one if it is lost.
+3. Revoke it under **Whiteboard: Manage Agent Tokens**, which lists every
+   token with its access and last use. The next request with a revoked token
+   is refused.
+
+**A read-and-write token is full write access to every review on that
+Whiteboard**, and read access to the code of every registered repository.
+There is no per-review scope. Treat it like a password, give each agent its
+own, and revoke the ones you no longer use.
+
+How it works:
+
+- `POST /whiteboard/mcp` is MCP Streamable HTTP, stateless, answering in
+  JSON. The Theia backend checks the token, then forwards the tool calls to
+  the review server with its own token, which never leaves the backend. GET
+  and DELETE answer 405: there are no MCP sessions and no server-sent
+  stream. Request bodies are limited to 10 MB.
+- Requests without a token get 401 with `WWW-Authenticate: Bearer`. Cookies
+  and basic-auth credentials are ignored there. A request whose `Origin` is
+  another site gets 403. After 10 failed tokens in 5 minutes from one
+  address (the first `X-Forwarded-For` hop, which a client can set itself:
+  this slows down guessing, it does not stop a determined attacker; 256-bit
+  secrets do), that address gets 429 for the rest of the window.
+- Read-only tokens see and can call only reading tools.
+- One log line per request: the token's id and name, the JSON-RPC methods,
+  the tool names and outcome, and the status; never the token or arguments.
+- Tokens are `wbat_<id>_<secret>`: an 8-hex-character public id and a
+  32-byte random secret. They are stored in `/data/agent-tokens.json` (next
+  to the review state, mode 600, written atomically) with id, name, access,
+  the secret's SHA-256, and creation and revocation times. Last use goes in
+  `/data/agent-tokens.usage.json`, at most once a minute per token, so
+  routine requests never rewrite the token file. Both are re-read on every
+  check, so a revocation from anywhere applies at once.
+- Creating, listing and revoking go through `/whiteboard/admin/agent-tokens`,
+  behind basic auth; requests that carry a Bearer token or come from another
+  site are refused there, so an agent cannot mint or revoke tokens.
+- In the container, a fallback can list and revoke, but not create: tokens
+  come from the UI so they never pass through an ops shell or transcript.
+
+  ```sh
+  docker exec <whiteboard container> node \
+    /opt/whiteboard/theia/whiteboard-extension/lib/node/agent-tokens-cli.js list
+  docker exec <whiteboard container> node \
+    /opt/whiteboard/theia/whiteboard-extension/lib/node/agent-tokens-cli.js revoke <id>
+  ```
+
+Tested through the gateway, each of these needs basic auth or is refused
+(with a valid token in the request): `/whiteboard/mcp/../reviews-api`,
+`/whiteboard/mcp%2f..`, `//whiteboard/mcp`, `/whiteboard//mcp`,
+`/./whiteboard/mcp`, `/whiteboard/mcp/`, `/whiteboard/mcpx`,
+`/Whiteboard/mcp`, `/WHITEBOARD/MCP` and `/whiteboard/mcp/x`. A
+percent-encoded `/whiteboard/%6dcp` decodes to the exact path, so the gateway
+lets it through; it reaches Theia under the encoded name, which refuses it
+(403) for lacking the gateway header.
+
+Without the gateway (local `compose.yaml`, or a shell on the server), agents
+can also talk to the review server inside the container (with Compose, use
 `docker compose -f spikes/theia/compose.yaml exec whiteboard …` instead of
 `docker exec wb …`). Register checkouts by their **container** path:
 
@@ -323,7 +411,7 @@ docker exec wb node /opt/whiteboard/review/dist/cli.js \
   '{"path":"/workspace/my-repo"}'
 ```
 
-For MCP clients, use this as the server command:
+For MCP clients over stdio, use this as the server command:
 
 ```sh
 docker exec -i wb node /opt/whiteboard/review/dist/cli.js --state-dir /data/whiteboard mcp
@@ -340,7 +428,10 @@ real per-user access, replace the gateway with an identity-aware proxy
 (oauth2-proxy, a Keycloak gatekeeper). What the spike does do:
 
 - The review server stays on loopback inside the container; its token never
-  reaches the browser.
+  reaches the browser or an agent.
+- Agent tokens are per agent, revocable, stored only as hashes, and accepted
+  only at `/whiteboard/mcp`; see
+  [Authoring from agents](#authoring-from-agents).
 - The proxy refuses state-changing requests whose `Origin` does not match the
   `Host` (or `X-Forwarded-Host`) they were sent to, so other websites cannot
   write through a logged-in reverse proxy session.

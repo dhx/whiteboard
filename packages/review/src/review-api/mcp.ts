@@ -45,17 +45,38 @@ function mcpAuthoringGuidance(context: {
   ].join(" ");
 }
 
-export async function serveReviewMcp(
-  /** Connects to `key` once one is latched, else selects one. */
-  connect: (key?: string) => Promise<ConnectedReview>,
-  stdin: Readable,
-  stdout: Writable,
-  stderr: Writable = process.stderr,
-  traceEnabled = false,
+/** Connects to `key` once one is latched, else selects one. */
+export type ReviewMcpConnect = (key?: string) => Promise<ConnectedReview>;
+
+export interface ReviewMcpServerOptions {
+  stderr?: Writable;
+  traceEnabled?: boolean;
   /** What whiteboard_status reports when the Desktop cannot be reached, and why. */
-  offlineStatus?: (problem: string) => Promise<JsonValue>,
-  onToolCall?: (call: ReviewToolCall) => Promise<void> | void,
+  offlineStatus?: (problem: string) => Promise<JsonValue>;
+  onToolCall?: (call: ReviewToolCall) => Promise<void> | void;
+  /**
+   * Send tools/list_changed once the host can be reached after the tools were
+   * listed without it. Only a long-lived connection (stdio) can deliver it.
+   */
+  announceToolChanges?: boolean;
+  /** List and run only the tools that read (GET); refuse every write. */
+  readOnly?: boolean;
+}
+
+/** The Whiteboard MCP server, without a transport. */
+export function createReviewMcpServer(
+  connect: ReviewMcpConnect,
+  options: ReviewMcpServerOptions = {},
 ) {
+  const {
+    stderr = process.stderr,
+    traceEnabled = false,
+    offlineStatus,
+    onToolCall,
+    announceToolChanges = true,
+    readOnly = false,
+  } = options;
+
   const instructionsTool = {
     ...authoringTools(false, traceEnabled).find(
       (tool) => tool.name === "review_get_instructions",
@@ -66,7 +87,7 @@ export async function serveReviewMcp(
   const server = new Server(
     { name: "whiteboard", version: "1.0.0" },
     {
-      capabilities: { tools: { listChanged: true } },
+      capabilities: { tools: { listChanged: announceToolChanges } },
     },
   );
 
@@ -84,11 +105,11 @@ export async function serveReviewMcp(
     const { client, instance } = await connect(latched);
     latched ??= instance?.key;
 
-    catalog = (await client.read<AuthoringTool[]>("/authoring", signal)).map(
-      publicTool,
-    );
+    catalog = (await client.read<AuthoringTool[]>("/authoring", signal))
+      .map(publicTool)
+      .filter((tool) => !readOnly || tool.method === "GET");
 
-    if (announceCatalog) {
+    if (announceCatalog && announceToolChanges) {
       announceCatalog = false;
       void server.sendToolListChanged().catch(() => {});
     }
@@ -178,7 +199,11 @@ export async function serveReviewMcp(
       tool = tools.find((tool) => tool.name === request.params.name);
 
       if (!tool)
-        throw new Error(`Unknown Whiteboard tool: ${request.params.name}`);
+        throw new Error(
+          readOnly
+            ? `Unknown or write Whiteboard tool: ${request.params.name}. This connection is read-only.`
+            : `Unknown Whiteboard tool: ${request.params.name}`,
+        );
 
       const result = await callPublicTool(
         client,
@@ -215,6 +240,27 @@ export async function serveReviewMcp(
       };
     }
   });
+
+  return server;
+}
+
+export async function serveReviewMcp(
+  connect: ReviewMcpConnect,
+  stdin: Readable,
+  stdout: Writable,
+  stderr: Writable = process.stderr,
+  traceEnabled = false,
+  /** What whiteboard_status reports when the Desktop cannot be reached, and why. */
+  offlineStatus?: (problem: string) => Promise<JsonValue>,
+  onToolCall?: (call: ReviewToolCall) => Promise<void> | void,
+) {
+  const server = createReviewMcpServer(connect, {
+    stderr,
+    traceEnabled,
+    offlineStatus,
+    onToolCall,
+  });
+
   await server.connect(new StdioServerTransport(stdin, stdout));
 
   return server;

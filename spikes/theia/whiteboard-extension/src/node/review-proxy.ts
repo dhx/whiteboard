@@ -79,17 +79,11 @@ export function reviewProxyTarget(
 }
 
 /**
- * The proxy has no session of its own, so a state-changing request is only
- * accepted from a page Theia served: its Origin must match the Host it was
- * sent to. Requests without an Origin (curl, agents) are allowed; put an
- * authenticating reverse proxy in front before exposing the port.
+ * Whether a request carrying an Origin was sent from a page on the host it
+ * was sent to (Host, or X-Forwarded-Host behind a proxy). Requests without an
+ * Origin (curl, agents) are not cross-site.
  */
-export function isCrossSiteWrite(
-  method: string,
-  headers: IncomingHttpHeaders,
-): boolean {
-  if (SAFE_METHODS.has(method.toUpperCase())) return false;
-
+export function isCrossSiteRequest(headers: IncomingHttpHeaders): boolean {
   const origin = headers.origin;
 
   if (!origin) return false;
@@ -110,6 +104,19 @@ export function isCrossSiteWrite(
   ].filter((host): host is string => Boolean(host));
 
   return !hosts.some((host) => host.split(",")[0]?.trim() === originHost);
+}
+
+/**
+ * The proxy has no session of its own, so a state-changing request is only
+ * accepted from a page Theia served: its Origin must match the Host it was
+ * sent to. Requests without an Origin (curl, agents) are allowed; put an
+ * authenticating reverse proxy in front before exposing the port.
+ */
+export function isCrossSiteWrite(
+  method: string,
+  headers: IncomingHttpHeaders,
+): boolean {
+  return !SAFE_METHODS.has(method.toUpperCase()) && isCrossSiteRequest(headers);
 }
 
 function copyHeaders(

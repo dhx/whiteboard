@@ -1,14 +1,21 @@
 import path from "node:path";
 
-import { BackendApplicationContribution } from "@theia/core/lib/node/backend-application";
+import {
+  BackendApplicationContribution,
+  EarlyExpressMiddleware,
+} from "@theia/core/lib/node/backend-application";
+import type { WsRequestValidatorContribution } from "@theia/core/lib/node/ws-request-validators";
 import express from "@theia/core/shared/express";
-import { injectable } from "@theia/core/shared/inversify";
+import { inject, injectable } from "@theia/core/shared/inversify";
 
 import {
   WHITEBOARD_API_PATH,
   WHITEBOARD_CANVAS_PATH,
 } from "../common/whiteboard-paths";
+import { GatewayGuard, agentTokenRoutes, mcpEndpoint } from "./agent-access";
+import { AgentTokenStore, agentTokenFile } from "./agent-tokens";
 import { readCanvasLoader } from "./canvas-assets";
+import { mcpHandlerLoader } from "./mcp-handler";
 import { createReviewProxy } from "./review-proxy";
 import {
   ReviewServerProcess,
@@ -16,12 +23,32 @@ import {
 } from "./review-server-process";
 
 @injectable()
-export class WhiteboardBackendContribution implements BackendApplicationContribution {
-  private readonly server = new ReviewServerProcess(
-    reviewServerOptionsFromEnv(),
+export class WhiteboardBackendContribution
+  implements BackendApplicationContribution, WsRequestValidatorContribution
+{
+  @inject(EarlyExpressMiddleware)
+  protected readonly earlyMiddleware!: EarlyExpressMiddleware;
+
+  private readonly options = reviewServerOptionsFromEnv();
+  private readonly server = new ReviewServerProcess(this.options);
+  private readonly tokens = new AgentTokenStore(
+    agentTokenFile(process.env, this.options.stateDir),
+  );
+  // Set in the Coolify deployment, where the gateway shares it.
+  private readonly guard = new GatewayGuard(
+    process.env.WHITEBOARD_GATEWAY_SECRET?.trim() || undefined,
   );
 
+  allowWsUpgrade(
+    request: Parameters<WsRequestValidatorContribution["allowWsUpgrade"]>[0],
+  ) {
+    return this.guard.allowsWebSocket(request);
+  }
+
   initialize() {
+    // Before Theia's own routes and static files.
+    this.earlyMiddleware.handlers.push(this.guard.middleware());
+
     // Start early so the first canvas does not wait for SQLite to open, but
     // never fail Theia's startup over it; requests report the error instead.
     this.server.connection().catch((error) => {
@@ -30,6 +57,14 @@ export class WhiteboardBackendContribution implements BackendApplicationContribu
   }
 
   configure(app: express.Application) {
+    app.use(
+      mcpEndpoint({
+        tokens: this.tokens,
+        reviewServer: () => this.server.connection(),
+        handler: mcpHandlerLoader(this.options.cli),
+      }),
+    );
+    app.use(agentTokenRoutes(this.tokens));
     app.use(
       WHITEBOARD_API_PATH,
       createReviewProxy(() => this.server.connection()),
