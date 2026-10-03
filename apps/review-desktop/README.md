@@ -50,11 +50,11 @@ Run `pnpm desktop:build` without the flag for a full compile and typecheck.
 ### Launching without taking focus
 
 `pnpm dev:background` builds and launches the Desktop without bringing its
-window forward, the same way `review app launch` does without `--focus`. It
+window forward, the same way `whiteboard app launch` does without `--focus`. It
 sets `DEV_FAST_REVIEW_DESKTOP_BACKGROUND=1`, which `run.sh` passes through to
 the Electron process; set it yourself for a bare `pnpm desktop:run`. The
 window stays behind whatever is frontmost until you click it or run
-`review app launch --focus`. Computer-use and other screen-driven tests rely
+`whiteboard app launch --focus`. Computer-use and other screen-driven tests rely
 on this so the terminal that started the app keeps focus.
 
 To reset generated Code OSS artifacts and the local Desktop profile, run this
@@ -70,7 +70,7 @@ This does not remove authored reviews in `${DEV_REVIEW_HOME:-~/.dev}/reviews`.
 under `${DEV_REVIEW_HOME:-~/.dev}/review-desktop/`; discovery is the private,
 atomic `server.json`, and Code OSS profile state is under `state/`.
 
-The released macOS app uses `review app launch` as its command-line entry.
+The released macOS app uses `whiteboard app launch` as its command-line entry.
 The app-managed CLI removes `ELECTRON_RUN_AS_NODE` and starts its exact
 `process.execPath`. Thus, the app can live outside `/Applications`. A
 repository or standalone CLI asks macOS to open bundle identifier
@@ -79,8 +79,8 @@ an attached Desktop client before it reports readiness.
 Tests can set `DEV_FAST_REVIEW_DESKTOP_STATE_ROOT` to keep the Code OSS profile
 under an isolated directory.
 
-Run `review app pick [--review <uuid>]` to select a review. Bare `review app`
-starts the app. `review info` does not start it.
+Run `whiteboard app pick [--review <uuid>]` to select a review. Bare `whiteboard app`
+starts the app. `whiteboard info` does not start it.
 
 Home lists review descriptors derived from `review.json`. Missing worktrees or
 documents remain visible but disabled. Reopening creates a desktop-owned active
@@ -103,9 +103,9 @@ built Desktop through the installed CLI and the JSON review API. See
 
 ## Packaging and releases
 
-macOS arm64 is the only packaged platform with release channels; Linux has a
-packaging script but no distribution. Signed builds auto-update from
-`https://update.dev.fast` on either the `stable` or `preview` channel.
+macOS (arm64 and x64) is the only packaged platform with release channels;
+Linux has a packaging script but no distribution. Signed builds auto-update
+from `https://update.dev.fast` on either the `stable` or `preview` channel.
 
 ### Local packaging
 
@@ -113,7 +113,7 @@ packaging script but no distribution. Signed builds auto-update from
 SKIP_NOTARIZE=1 pnpm --filter @dev.fast/review-desktop app:package:macos
 ```
 
-builds an unsigned `VSCode-darwin-arm64/Whiteboard.app` and skips
+builds an unsigned `VSCode-darwin-<arch>/Whiteboard.app` for the host arch and skips
 signing, notarization, and artifact creation. A full run needs the signing
 environment and produces the `.dmg` plus one Squirrel update zip per installed
 bundle folder name (`Whiteboard-…zip`, `Review-…zip`; see `release-channel.mjs`),
@@ -138,19 +138,31 @@ patch/minor/major bump. The workflow:
 1. bumps `apps/review-desktop/package.json`, commits `[skip ci]`, tags
    `vX.Y.Z`, and creates a draft GitHub release;
 2. compiles the platform-independent Code OSS, Review canvas, Review server,
-   workspace packages, and pinned `darwin-arm64` curated extensions on Linux,
-   then uploads one `darwin-payload` artifact;
-3. extracts that payload on `macos-15-xlarge`, performs only the native Darwin
+   workspace packages, and pinned `darwin-arm64` and `darwin-x64` curated
+   extensions on Linux, then uploads one `darwin-payload` artifact;
+3. extracts that payload on two matrix legs, `darwin-arm64` on `macos-15-xlarge`
+   and `darwin-x64` on `macos-15-large`, performs only the native Darwin
    package assembly, stages the runtime, tools, and extensions, then signs and
    notarizes via `app:package:macos`;
 4. gates the upload with `scripts/validate-release-artifacts.mjs` (curated
    extension closure, staple and Gatekeeper checks, and packaged `product.json`
    commit/quality/updateUrl assertions), which also emits the `latest.json`
-   feed manifest;
-5. uploads to R2 in two passes — zip and dmg payloads first, `latest.json`
-   last — so a client can never see a manifest whose payload is missing;
-6. curls the live feed to confirm the new release is served, attaches the dmg
-   to the GitHub release, and publishes it.
+   feed manifest for that arch;
+5. once both legs pass, `publish-macos` uploads to R2 in two passes — both
+   arches' zip and dmg payloads first, both `latest.json` files last — so a
+   client can never see a manifest whose payload is missing;
+6. curls both live feeds to confirm the new release is served, attaches both
+   dmgs to the GitHub release, and publishes it.
+
+The `platforms` input picks `all` (the default), `macos`, `linux` or `windows`.
+Windows builds in parallel with the Darwin payload and the Linux packages
+(`review-windows-build.yml` on the 16-core `review_big_boy_windows` runner) and
+signs every binary and installer with Azure Artifact Signing through the
+`windows-signing` environment. Nothing is uploaded until every selected platform
+has built and validated; `publish-windows` then uploads the installers to
+`releases/<version>/win32-x64/`, points `install.dev.fast/windows` at the new
+per-user installer, and attaches the installers to the GitHub release. Windows
+has no update feed yet, so installed Windows apps do not update themselves.
 
 ### Promoting a preview to stable
 
@@ -234,22 +246,25 @@ preview lands at the new application path; later preview updates retain it.
 
 The release is a split build. Linux is not only a cache warmer: it is the
 authoritative producer for everything that does not require a Darwin host.
-`scripts/compile-darwin-payload.sh` creates the archive, and
-`REVIEW_DESKTOP_PRECOMPILED=1 scripts/package-macos.sh` consumes it.
+`scripts/compile-darwin-payload.sh` creates one archive for both Darwin
+targets, and `REVIEW_DESKTOP_PRECOMPILED=1 scripts/package-macos.sh` consumes it
+on each macOS build leg (`darwin-arm64` and `darwin-x64`), packaging the target
+of the host it runs on.
 
-| Produced on Linux and transferred | Produced or assembled on macOS |
-| --- | --- |
-| Code OSS `out-build`, `out-vscode-min`, and `out` | Electron application bundle |
-| Compiled built-in extensions in `.build/extensions` | Darwin-native npm closure installed by `pnpm` |
-| Manifest-selected `darwin-arm64` VSIX payloads, including `ty`, Ruff, and rust-analyzer | Manifest-selected extensions copied into the final app |
-| Review canvas/server and required workspace `dist` directories | App icon, signatures, notarization, ZIP, and DMG |
+| Produced on Linux and transferred                                                                        | Produced or assembled on macOS                         |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| Code OSS `out-build`, `out-vscode-min`, and `out`                                                        | Electron application bundle                            |
+| Compiled built-in extensions in `.build/extensions`                                                      | Darwin-native npm closure installed by `pnpm`          |
+| Manifest-selected `darwin-arm64` and `darwin-x64` VSIX payloads, including `ty`, Ruff, and rust-analyzer | Manifest-selected extensions copied into the final app |
+| Review canvas/server and required workspace `dist` directories                                           | App icon, signatures, notarization, ZIP, and DMG       |
 
 The curated-extension handoff is manifest-driven. Linux materializes the
-target variants, copies them into
-`.build/review-curated-extensions/darwin-arm64`, and includes that directory in
-the archive. macOS requires that directory before packaging and verifies every
-manifest entry while copying it into the app. Release validation verifies the
-same complete set again after notarization and before upload.
+variants for every Darwin target, copies each into
+`.build/review-curated-extensions/<target>`, and includes those directories in
+the archive. Each macOS leg requires every target's directory before packaging,
+then verifies every manifest entry for its own target while copying that
+directory into the app. Release validation verifies the same complete set again
+after notarization and before upload.
 
 `scripts/darwin-payload-manifest.sh` is the source of truth for archive paths.
 Its required paths must exist before macOS packaging starts. Its archive-only
@@ -275,7 +290,8 @@ front doors.
 
 `GET /` is the stable install landing: it redirects to the
 `releases/latest/darwin-arm64/Whiteboard.dmg` alias, while `GET /preview` redirects
-to `releases/preview-latest/darwin-arm64/Whiteboard.dmg`. For example,
+to `releases/preview-latest/darwin-arm64/Whiteboard.dmg`. Browsers go to
+<https://dev.fast/install> or <https://dev.fast/install/preview> instead. For example,
 `curl -fLOJ https://install.dev.fast` downloads the current disk image. It
 deliberately does not read `latest.json` — the alias is uploaded with the
 payloads, so the download keeps working while the manifest is mid-upload. The
@@ -286,21 +302,24 @@ keys stay version-free for that reason, so the version rides on each object's
 browser download always does.
 
 ```
-update/stable/darwin-arm64/latest.json     current-release manifest
-update/preview/darwin-arm64/latest.json    current-preview manifest
-releases/<version>/darwin-arm64/           Whiteboard-darwin-arm64-<version>.zip + .dmg
-                                           Review-darwin-arm64-<version>.zip (Review.app-named copy)
-releases/latest/darwin-arm64/Whiteboard.dmg
-                                           direct-download alias, saved as
-                                           df-whiteboard-<version>.dmg
-releases/preview-latest/darwin-arm64/Whiteboard.dmg
-                                           preview-download alias, saved as
-                                           df-whiteboard-preview-<preview-version>.dmg
+update/stable/<target>/latest.json        current-release manifest
+update/preview/<target>/latest.json       current-preview manifest
+releases/<version>/<target>/              Whiteboard-<target>-<version>.zip + .dmg
+                                          Review-<target>-<version>.zip (Review.app-named copy)
+releases/latest/<target>/Whiteboard.dmg
+                                          direct-download alias, saved as
+                                          df-whiteboard-<version>.dmg
+releases/preview-latest/<target>/Whiteboard.dmg
+                                          preview-download alias, saved as
+                                          df-whiteboard-preview-<preview-version>.dmg
 ```
+
+`<target>` is `darwin-arm64` or `darwin-x64`; every key exists for both.
 
 `GET /api/update/:platform/:quality/:commit` answers 204 when the caller's
 stamped commit matches the manifest (or no manifest exists yet) and Squirrel
-JSON otherwise; `GET /releases/*` streams payloads. Because the feed keys its
+JSON otherwise; `GET /releases/*` streams payloads. Intel clients request the
+plain `darwin` platform, which the Worker maps to `darwin-x64`. Because the feed keys its
 answer off the caller's commit, the fork's `doDownloadUpdate` sends the
 installed commit — not the target commit — when re-checking (see `UPSTREAM`).
 
@@ -322,8 +341,10 @@ PostHog error tracking (`scripts/upload-source-maps.mjs`), so reported stack
 traces resolve to source files and functions. That build fails when the two
 `POSTHOG_CLI_*` credentials are missing.
 
-Normal CI uses GitHub's standard Ubuntu runner. The manual release workflow
-uses the `review_big_boy` larger runner. Its `review_release` runner group
+Normal CI uses GitHub's standard Ubuntu runner. Windows builds, in CI and in
+releases, use the `review_big_boy_windows` larger runner in the `review_windows`
+runner group, which only this repository can use; pull requests from forks skip
+them. The manual release workflow uses the `review_big_boy` larger runner. Its `review_release` runner group
 allows `review-desktop-release.yml` and `review-desktop-preview.yml` from
 `main`. The first stable or preview job also uses the `review-release`
 environment, which requires repository-admin approval before downstream jobs
@@ -342,10 +363,10 @@ version, target, size, and SHA-256 hash in
 The build fetches bundled extensions from Open VSX. It checks each hash and
 unpacks the extension into `code-oss/extensions/`.
 
-| Extension | Notes |
-| --- | --- |
-| ty, ruff | Same; `ms-python.python` rides along as their extension dependency |
-| Go | Bundles nothing and prompts to `go install gopls` against your own Go toolchain |
+| Extension  | Notes                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| ty, ruff   | Same; `ms-python.python` rides along as their extension dependency                           |
+| Go         | Bundles nothing and prompts to `go install gopls` against your own Go toolchain              |
 | Vim, Emacs | Adopted from the host VS Code install on first launch; otherwise off, and mutually exclusive |
 
 ### Optional extensions
@@ -354,11 +375,11 @@ Review downloads an optional group only after the user selects it in
 **Manage Extensions...**. Review checks the downloaded VSIX before installation.
 The application reloads once after a successful change.
 
-| Group | Requirements |
-| --- | --- |
-| Rust | rust-analyzer includes its server. Rust moved from bundled to optional. |
+| Group | Requirements                                                                                           |
+| ----- | ------------------------------------------------------------------------------------------------------ |
+| Rust  | rust-analyzer includes its server. Rust moved from bundled to optional.                                |
 | Swift | Install a Swift toolchain and expose `swift` on the shell `PATH`. The group includes LLDB DAP support. |
-| C# | Install a system .NET SDK and expose `dotnet` on the shell `PATH`. Review does not download .NET. |
+| C#    | Install a system .NET SDK and expose `dotnet` on the shell `PATH`. Review does not download .NET.      |
 
 Review updates installed optional groups to the catalog pins in the background.
 The update does not reload the window. A new pin takes effect on the next reload.
@@ -373,12 +394,12 @@ host restarts.
 **Preferences ▸ Settings...** (⌘,) opens the Settings tab. It is a canvas tab
 like Home and Agent Setup, not the stock VS Code settings editor. It holds:
 
-| Section | Setting |
-| --- | --- |
-| Privacy | Share anonymous usage data — see [docs/telemetry.md](../../docs/telemetry.md) |
-| Editor | Theme, Keymap |
-| Tools | Extensions |
-| Experimental Features | Software Map, Trace capture |
+| Section               | Setting                                                                       |
+| --------------------- | ----------------------------------------------------------------------------- |
+| Privacy               | Share anonymous usage data — see [docs/telemetry.md](../../docs/telemetry.md) |
+| Editor                | Theme, Keymap                                                                 |
+| Tools                 | Extensions                                                                    |
+| Experimental Features | Software Map, Trace capture                                                   |
 
 Software Map defaults to off. Enable it to add the Map tab to reviews.
 Disable it to remove Map entry points. This preference persists in the
@@ -434,6 +455,51 @@ Known limits:
 - The Review canvas is an iframe, so Vim and Emacs keymaps apply to workbench
   file, diff, and multi-diff editors, not text fields inside the canvas.
 
+## UI controls
+
+Prefer existing VS Code workbench primitives for standard desktop interactions:
+`IContextMenuService` for action and selection menus, `IDialogService` for
+confirmations and simple prompts, `IQuickInputService` for searchable choices,
+`IHoverService` for tooltips, and `INotificationService` for notifications.
+Use the host's settings subscriptions for settings state.
+
+Expose the capability through a small typed canvas adapter; keep Code OSS
+imports out of the React canvas package. Canvas menus use the optional UI
+capability passed to `mountReviewCanvas`, including on Home and onboarding.
+Reuse the existing `setupTooltip` and `notify` bridges. Workbench services pick
+the appropriate platform implementation; they do not always use OS-native UI.
+
+Keep rich document content, forms, and inline feedback in React. Add another UI
+library only for a concrete behavior the existing host or browser primitives
+do not cover. Menu controls use the Desktop host service; browser tests inject
+a test host instead of maintaining a second production menu implementation.
+Check keyboard navigation, cancellation, focus restoration, disposal, themes,
+zoom, and narrow layouts in the actual Desktop app when changing a host control;
+browser tests alone do not validate the workbench integration.
+
+## Canvas data
+
+The canvas uses TanStack Query (`canvas-query.tsx`) for local API and bridge
+requests. Use `useQuery` or `useMutation` for new requests instead of
+hand-written fetch effects; keep local UI state out of it.
+
+## Canvas CSS
+
+Canvas styles are StyleX, written with `stylex.create` next to the component
+that renders the element (`packages/review/app/src`). Shared pieces:
+`tokens.stylex.ts` (typed references to the theme's custom properties),
+`theme-styles.ts`, `controls-styles.ts` and `markers.stylex.ts`.
+
+- Use `tokens.*`, not raw colors.
+- For a different look inside another component, pass a variant or use
+  `stylex.when.ancestor` with a marker, not a descendant selector.
+- `global.css` holds only what StyleX cannot reach: the scope root, element
+  resets, and DOM the canvas does not render (workbench-mounted views, React
+  Flow internals, `::highlight()`). Don't add component styles there.
+- StyleX rules outrank the workbench's own CSS, which the browser tests don't
+  load, so check changes in the built canvas in Desktop (light, dark, narrow,
+  hover/focus, reduced motion). Do not add tests that assert CSS text.
+
 ## Development and validation
 
 Canvas changes need `pnpm --filter @dev.fast/review-canvas build` and a
@@ -469,7 +535,7 @@ fast monorepo tier.
 `code-oss/src/main.ts` runs in the Electron main process before anything else.
 Its `startup()` calls `bootstrapESM()` — which installs
 `globalThis._VSCODE_NLS_MESSAGES` — and only then dynamically imports
-`vs/code/electron-main/main.js`. Every *static* import at the top of `main.ts`,
+`vs/code/electron-main/main.js`. Every _static_ import at the top of `main.ts`,
 and everything those pull in transitively, is evaluated before that message
 table exists.
 

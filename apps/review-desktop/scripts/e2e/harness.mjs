@@ -11,7 +11,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -28,8 +27,6 @@ export const workspace = path.resolve(appRoot, "../..");
 export const sourcePackage = path.join(workspace, "packages/review");
 
 export const bugsLogPath = path.join(import.meta.dirname, "KNOWN_BUGS.md");
-
-const require = createRequire(path.join(appRoot, "code-oss/package.json"));
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -63,8 +60,8 @@ export async function createHarness({
   beforeLaunch,
   disableCommunityHandler = false,
 }) {
-  // Required lazily so `run.mjs --list` works without code-oss/node_modules.
-  const { chromium } = require("playwright-core");
+  // Imported lazily so `run.mjs --list` works without node_modules.
+  const { chromium } = await import("playwright-core");
 
   await assertRuntimeContents(runtime);
 
@@ -164,6 +161,8 @@ export async function createHarness({
 
   let appLog = "";
 
+  let launchLog = () => "";
+
   let app;
 
   let browser;
@@ -213,14 +212,13 @@ export async function createHarness({
 
     // New workbench windows can show the isolated profile's community invitation.
     await candidate.addLocatorHandler(
-      candidate.getByText("Join the Review community", { exact: true }),
+      candidate.getByText("Join the Whiteboard community", { exact: true }),
+      // A handler that throws is an unhandled rejection that ends the whole run, and a reload can close the page mid-dismissal.
       async () => {
         await candidate
-          .getByRole("checkbox", { name: "Don't show again" })
-          .check();
-        await candidate
           .getByRole("button", { name: "Not now", exact: true })
-          .click();
+          .click()
+          .catch(() => {});
       },
     );
   }
@@ -274,7 +272,7 @@ export async function createHarness({
       : [path.join(appRoot, "scripts/run.sh")];
 
     app = spawn(
-      packagedApp ? path.join(packagedApp, "Contents/MacOS/Review") : "bash",
+      packagedApp ? packagedExecutable(packagedApp) : "bash",
       launchArgs,
       { cwd: appRoot, env, detached: true, stdio: ["ignore", "pipe", "pipe"] },
     );
@@ -283,13 +281,16 @@ export async function createHarness({
       lifecycle(`Desktop exit: ${code}, ${signal}`),
     );
 
-    app.stdout.on("data", (chunk) => {
-      appLog = (appLog + chunk).slice(-200000);
-    });
+    // Each launch starts its own log, so a journey can search what this Desktop printed and nothing earlier.
+    let log = "";
 
-    app.stderr.on("data", (chunk) => {
-      appLog = (appLog + chunk).slice(-200000);
-    });
+    launchLog = () => log;
+
+    for (const stream of [app.stdout, app.stderr])
+      stream.on("data", (chunk) => {
+        appLog = (appLog + chunk).slice(-200000);
+        log = (log + chunk).slice(-200000);
+      });
   }
 
   async function attach() {
@@ -324,11 +325,11 @@ export async function createHarness({
   async function dismissCommunityDialog(candidate) {
     if (disableCommunityHandler) return;
 
-    const dialog = candidate.getByText("Join the Review community", {
+    const dialog = candidate.getByText("Join the Whiteboard community", {
       exact: true,
     });
 
-    // A restarted profile has already stored the "don't show again" choice, so absence is normal.
+    // It shows only to a reader with two reviews, and only until answered, so absence is normal.
     const shown = await dialog
       .waitFor({ state: "visible", timeout: 20000 })
       .then(() => true)
@@ -336,10 +337,6 @@ export async function createHarness({
 
     if (!shown) return;
 
-    await candidate
-      .getByRole("checkbox", { name: "Don't show again" })
-      .check()
-      .catch(() => {});
     await candidate
       .getByRole("button", { name: "Not now", exact: true })
       .click()
@@ -473,7 +470,7 @@ export async function createHarness({
       } catch (error) {
         if (
           args[0] === "info" &&
-          error.stdout?.includes("Review Desktop is not ready.")
+          `${error.stdout}${error.stderr}`.includes("is not running.")
         )
           return null;
 
@@ -519,8 +516,7 @@ export async function createHarness({
 
     while (running() && Date.now() < deadline) await sleep(100);
 
-    if (running())
-      throw new Error(`Timed out waiting for ${label}`);
+    if (running()) throw new Error(`Timed out waiting for ${label}`);
   }
 
   /** `signal: "SIGKILL"` stops the Desktop without letting it run any shutdown handler. */
@@ -542,7 +538,10 @@ export async function createHarness({
   /** Quits the way a reader does, through `workbench.action.quit` (Cmd/Ctrl+Q), then relaunches. */
   async function quitAndRelaunchDesktop() {
     lifecycle("Quitting through workbench.action.quit");
+    const closed = page.waitForEvent("close", { timeout: 30000 });
     await page.keyboard.press("ControlOrMeta+KeyQ");
+    await closed;
+    await closeBrowser();
     await waitForExit("Desktop quit");
     await relaunch();
   }
@@ -594,7 +593,11 @@ export async function createHarness({
 
     console.log(JSON.stringify({ ...report, success }));
 
-    if (success && !keep) await rm(root, { recursive: true, force: true });
+    if (success && !keep) {
+      // Go's module cache is read-only, and `rm` cannot empty a read-only directory.
+      await exec("chmod", ["-R", "u+w", root]).catch(() => {});
+      await rm(root, { recursive: true, force: true });
+    }
 
     return success;
   }
@@ -602,6 +605,7 @@ export async function createHarness({
   return Object.assign(ctx, {
     api,
     appLog: () => appLog,
+    launchLog: () => launchLog(),
     apiOk,
     apiCanvasFor,
     cli,
@@ -687,38 +691,42 @@ export const orderReviewBlocks = [
   },
 ];
 
-/** Closes with one Escape the modal editor Go to Definition opens; `focus` is what must hold focus when the key lands. */
-export async function dismissModalEditor(
-  ctx,
-  page = ctx.page,
-  focus = ".monaco-modal-editor-block",
-) {
-  const modalEditor = page.locator(".monaco-modal-editor-block").first();
+/** Go to Definition opens a Source window of its own; returns its page once `fileName` is the active editor there. */
+export function sourceWindowFor(ctx, fileName) {
+  return ctx.until(async () => {
+    for (const candidate of ctx.browser
+      .contexts()
+      .flatMap((context) => context.pages()))
+      if (
+        // The review's own window hosts the canvas; closing it would end the journey.
+        candidate !== ctx.page &&
+        (await candidate
+          .locator(".review-canvas-root")
+          .count()
+          .catch(() => 1)) === 0 &&
+        (
+          await candidate
+            .locator(".tabs-container .tab.active")
+            .first()
+            .innerText({ timeout: 1000 })
+            .catch(() => "")
+        ).includes(fileName)
+      )
+        return candidate;
 
-  const opened = await modalEditor.waitFor({ timeout: 10000 }).then(
-    () => true,
-    () => false,
-  );
-
-  if (!opened) return false;
-
-  // Which element holds focus decides which Escape rule runs, so the press is measured only once it has settled.
-  await ctx.until(
-    () =>
-      page.evaluate(
-        (selector) => document.activeElement?.closest(selector) != null,
-        focus,
-      ),
-    `${focus} to take focus in the modal editor`,
-    10000,
-  );
-  await page.keyboard.press("Escape");
-  await modalEditor.waitFor({ state: "detached", timeout: 5000 });
-
-  return true;
+    return null;
+  }, `a Source window showing ${fileName}`);
 }
 
-/** Opens a review the way a reader does, with `review app pick --review`. */
+/** Closes a Source window through the workbench, leaving the review's own window open. */
+export async function closeSourceWindow(source) {
+  const closed = source.waitForEvent("close", { timeout: 30000 });
+
+  await source.keyboard.press("ControlOrMeta+Shift+KeyW");
+  await closed;
+}
+
+/** Opens a review the way a reader does, with `whiteboard app pick --session`. */
 export async function pickReview(ctx, reviewId, cwd = ctx.repo) {
   const picked = await ctx.cliRaw(
     ["app", "pick", "--session", reviewId, "--json"],
@@ -729,22 +737,22 @@ export async function pickReview(ctx, reviewId, cwd = ctx.repo) {
   assert.equal(picked.code, 0, `app pick: ${picked.stdout}\n${picked.stderr}`);
 }
 
-/** Opens the Settings page on the current `ctx.page`; `Meta+,` repeats because a fresh profile reloads the workbench. */
+/** Opens the Settings page on the current `ctx.page`; `ControlOrMeta+Comma` repeats because a fresh profile reloads the workbench. */
 export async function openSettings(ctx) {
-  const settings = ctx.page.locator(
-    ".review-home-content.review-settings-page",
-  );
+  const settings = ctx.page.locator("main.review-home").filter({
+    has: ctx.page.getByRole("heading", { name: "Settings", level: 1 }),
+  });
 
   await ctx.until(
     async () => {
-      await ctx.page.keyboard.press("Meta+,");
+      await ctx.page.keyboard.press("ControlOrMeta+Comma");
 
       return await settings.waitFor({ state: "visible", timeout: 5000 }).then(
         () => true,
         () => false,
       );
     },
-    "the Settings page after Meta+,",
+    "the Settings page after ControlOrMeta+Comma",
     60000,
   );
 
@@ -759,8 +767,7 @@ export async function installExtensionGroup(
   const settings = await openSettings(ctx);
 
   await settings
-    .locator(".review-settings-row")
-    .filter({ hasText: "Extensions" })
+    .getByRole("region", { name: "Tools" })
     .getByRole("button", { name: "Manage" })
     .click();
 
@@ -794,8 +801,14 @@ export async function installExtensionGroup(
     timeout,
   );
 
-  // The install ends in a window reload, which has to be up again before a journey touches the workbench.
+  // The install ends in a window reload, which has to be up and attached again before a journey touches the workbench or the API.
   await ctx.page.locator(".monaco-workbench").waitFor({ timeout: 120000 });
+  await ctx.until(
+    async () =>
+      (await (await fetch(`${ctx.discovery.url}/health`)).json())
+        .desktopAttached,
+    "the Desktop to reattach after the install reload",
+  );
 }
 
 /** Brings the Home canvas to the front by activating its editor tab; falls back to a restart. */
@@ -808,4 +821,11 @@ export async function openHome(ctx) {
   if (await tab.count()) await tab.click();
   else await ctx.restartDesktop();
   await ctx.page.locator("main.review-home").waitFor({ timeout: 60000 });
+}
+
+/** `--app` names a macOS bundle, or the installed executable on Linux and Windows. */
+function packagedExecutable(app) {
+  return app.endsWith(".app")
+    ? path.join(app, "Contents/MacOS", path.basename(app, ".app"))
+    : app;
 }

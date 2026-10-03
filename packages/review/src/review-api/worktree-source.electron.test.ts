@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import { reviewTestAliases } from "../../test-config.js";
+import { reviewTestAliases, sourceAliases } from "../../test-config.js";
 
 // Desktop hosts the review server in Electron, whose `fs` differs from Node's.
 // CI builds this binary before the package tests run.
@@ -55,7 +55,7 @@ it.skipIf(!electron && !process.env.CI)(
     const git = (...args: string[]) =>
       execFileSync("git", args, { cwd: repository });
 
-    git("init", "-q");
+    git("init", "-q", "-b", "main");
     // Not an archive: a fixture of the kind language-server test suites carry.
     writeFileSync(path.join(repository, "fixture.asar"), "plain bytes\n");
     writeFileSync(path.join(repository, "index.ts"), "export {};\n");
@@ -79,12 +79,20 @@ it.skipIf(!electron && !process.env.CI)(
       tsconfig,
       JSON.stringify({
         compilerOptions: {
-          paths: Object.fromEntries(
-            Object.entries(reviewTestAliases).map(([name, file]) => [
-              name,
-              [file],
-            ]),
-          ),
+          paths: {
+            ...Object.fromEntries(
+              Object.entries(reviewTestAliases).map(([name, file]) => [
+                name,
+                [file],
+              ]),
+            ),
+            ...Object.fromEntries(
+              Object.entries(sourceAliases).map(([name, root]) => [
+                `${name}/*`,
+                [`${root}/*`],
+              ]),
+            ),
+          },
         },
       }),
     );

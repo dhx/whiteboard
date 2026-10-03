@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { reviewCommandPaletteLabel } from './reviewCommandPalette.js';
+import { isReviewPaletteCommand, reviewCommandPaletteLabel } from './reviewCommandPalette.js';
 
 test('uses the human-readable command title', () => {
 	assert.equal(
@@ -29,4 +29,14 @@ test('includes a command category and removes icons', () => {
 
 test('falls back to the command id when metadata is unavailable', () => {
 	assert.equal(reviewCommandPaletteLabel('internal.command', undefined), 'internal.command');
+});
+
+test('keeps Whiteboard commands', () => {
+	assert.equal(isReviewPaletteCommand('review.checkForUpdates'), true);
+	assert.equal(isReviewPaletteCommand('whiteboard.openSharedSession'), true);
+});
+
+test('drops stock navigation commands', () => {
+	assert.equal(isReviewPaletteCommand('editor.action.revealDefinition'), false);
+	assert.equal(isReviewPaletteCommand('workbench.action.quickOpen'), false);
 });

@@ -4,12 +4,14 @@ import path from "node:path";
 
 import { resolveRevision } from "@dev.fast/local-vcs";
 import { writePrivateJsonAtomic } from "@dev.fast/trace-core";
+import {
+  documentSchema,
+  resourceReferences,
+} from "@review/review-api/document";
+import type { LocalReviewData } from "@review/review-api/local-data";
+import type { ReviewStore, Snapshot } from "@review/review-api/store";
+import { devReviewHome } from "@review/review-home-paths";
 import { z } from "zod";
-
-import { documentSchema, resourceReferences } from "../review-api/document";
-import type { LocalReviewData } from "../review-api/local-data";
-import type { ReviewStore, Snapshot } from "../review-api/store";
-import { devReviewHome } from "../review-home-paths";
 
 const authoredSchema = z.strictObject({
   title: z.string().min(1),
@@ -163,11 +165,20 @@ export function createTutorialService(input: {
         commandId: randomUUID(),
         operation: { type: "delete", reviewId },
       });
-    await rm(tutorialRoot, { recursive: true, force: true });
+
+    // Windows cannot delete a checkout while its Git reader or watchers
+    // hold it open, and handles can outlive their close briefly.
+    for (const repository of input.store.repositories()) {
+      const relative = path.relative(tutorialRoot, repository.path);
+
+      if (relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+        await input.data.forgetRepository(repository.id);
+    }
+
+    await rm(tutorialRoot, { recursive: true, force: true, maxRetries: 10 });
   }
 
   return {
-    find,
     async status() {
       return {
         version: 1 as const,

@@ -16,8 +16,13 @@ import {
   removeLegacyGlobalReviewInstalls,
   runReviewMigration,
 } from "./migrate";
-import { createReviewDir, sealReviewCandidate } from "./review-home";
-import { cleanupTempDirs, gitRepository, tempDir } from "./review-test-utils";
+import { sealReviewCandidate } from "./review-home";
+import {
+  cleanupTempDirs,
+  createLegacyReviewDir,
+  gitRepository,
+  tempDir,
+} from "./review-test-utils";
 
 type TestRunCommand = (
   command: string,
@@ -34,7 +39,7 @@ type TestRunProcess = (input: {
 
 afterEach(cleanupTempDirs);
 
-describe("review migrate apply", () => {
+describe("whiteboard migrate apply", () => {
   it("leaves retired draft MDX untouched without reporting authoring blockers", async () => {
     const { reviewHome, reviewDir } = await canonicalReview();
 
@@ -173,7 +178,6 @@ describe("review migrate apply", () => {
           return {
             documents: 1,
             failedReviewUuids: [uuid],
-            droppedLegacyPeekReviews: 0,
             droppedReviews: 0,
             legacyCheckoutsRemoved: 0,
           };
@@ -206,7 +210,6 @@ describe("review migrate apply", () => {
       runtime: {
         migrateStoredReviewData: async () => ({
           documents: 3,
-          droppedLegacyPeekReviews: 0,
           droppedReviews: 1,
           legacyCheckoutsRemoved: 0,
         }),
@@ -229,7 +232,7 @@ describe("review migrate apply", () => {
     });
 
     expect(code).toBe(1);
-    expect(io.out.join("")).toContain("1 old Review dropped");
+    expect(io.out.join("")).toContain("1 old review dropped");
     expect(io.out.join("")).toContain("1 jj repository converted");
     expect(io.out.join("")).toContain("1 blocker");
     expect(io.err.join("")).toContain(
@@ -276,52 +279,7 @@ describe("review migrate apply", () => {
     expect(catalogCleanup).toHaveBeenCalledOnce();
     expect(io.out.join("")).toContain("1 catalog entry removed");
     expect(io.err.join("")).toContain(
-      "Old Review cleanup failed: missing session.json",
-    );
-  });
-
-  it("reports per-Review blockers without aborting the stored-data phase", async () => {
-    const io = streams();
-
-    const code = await runReviewMigration({
-      homeDir: "/home/reviewer",
-      packageRoot: "/desktop/review",
-      env: { DEV_REVIEW_HOME: "/review-home" },
-      stdout: io.stdout,
-      stderr: io.stderr,
-      runtime: {
-        migrateStoredReviewData: async (input) => {
-          input.onBlocker?.("one legacy Review could not migrate");
-
-          return {
-            documents: 2,
-            droppedLegacyPeekReviews: 0,
-            droppedReviews: 1,
-            legacyCheckoutsRemoved: 0,
-          };
-        },
-        migrateJjReviewRepositories: async () => ({
-          checked: 0,
-          migrated: 0,
-          blockers: [],
-        }),
-        removeLegacyDesktopCatalog: async () => ({
-          checked: 0,
-          removed: 0,
-          blockers: [],
-        }),
-        removeLegacyGlobalReviewInstalls: async () => ({
-          checked: 0,
-          removed: 0,
-          blockers: [],
-        }),
-      },
-    });
-
-    expect(code).toBe(1);
-    expect(io.out.join("")).toContain("1 old Review dropped");
-    expect(io.err.join("")).toContain(
-      "Review migration blocker: one legacy Review could not migrate",
+      "Old review cleanup failed: missing session.json",
     );
   });
 });
@@ -537,7 +495,7 @@ async function canonicalReview(): Promise<{
   const reviewHome = await tempDir("review-migrate-");
   const sourceRoot = await gitRepository();
 
-  const created = await createReviewDir({
+  const created = await createLegacyReviewDir({
     reviewsHomePath: reviewHome,
     worktreePath: sourceRoot,
     baseRef: "HEAD",

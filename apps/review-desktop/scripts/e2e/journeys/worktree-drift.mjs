@@ -19,8 +19,12 @@ export const options = {};
 
 const TITLE = "Order review";
 
-/** The banner a snapshot marked `sourceUnavailable` renders instead of the source (see api-document.tsx). */
-const RETAINED_SOURCE = "Local checkout unavailable. Showing retained source.";
+const MOVED_BUG =
+  "A review whose repository directory moves or is deleted renders `ReviewApiError: Review operation failed.`";
+
+/** The banner a snapshot marked `sourceUnavailable` shows under the topbar (see missing-checkout-banner.tsx). */
+const RETAINED_SOURCE =
+  "Local checkout unavailable. Showing the source saved with the review.";
 
 /** Every locator this journey uses, rebuilt from the current `ctx.page` because each restart replaces it. */
 function canvasUi(ctx) {
@@ -30,9 +34,13 @@ function canvasUi(ctx) {
     heading: canvas.getByRole("heading", { name: TITLE, exact: true }),
     // The state a missing checkout is meant to reach (see desktop-entry.tsx).
     unavailable: ctx.page.getByText("Worktree unavailable"),
-    retained: canvas.getByText(RETAINED_SOURCE),
+    retained: ctx.page.getByRole("status").filter({ hasText: RETAINED_SOURCE }),
+    dismiss: ctx.page
+      .getByRole("status")
+      .getByRole("button", { name: "Dismiss review", exact: true }),
+    failed: canvas.getByText(/^Whiteboard operation failed \(Error\)\./),
     peek: canvas
-      .locator('.review-inline-editor[data-review-inline-editor="order.ts"]')
+      .locator('[data-review-inline-editor="order.ts"]')
       .first(),
   };
 }
@@ -114,32 +122,48 @@ export async function run(ctx) {
   await ctx.restartDesktop();
   await pickReview(ctx, review.reviewId, moved);
 
-  const { heading, unavailable } = canvasUi(ctx);
+  const { heading, unavailable, failed } = canvasUi(ctx);
+
+  // The bug's signature, in this launch's log: the commits read still resolves the registered path, which no longer exists.
+  const staleRead = () =>
+    ctx
+      .launchLog()
+      .includes(
+        `/commits failed: Error: No Git or jj repository found for ${repo}.`,
+      );
 
   // The rename leaves the pinned checkout intact, so a full render is as legitimate as the degraded state.
   const outcome = await until(
     async () =>
       ((await unavailable.count()) > 0 && "unavailable") ||
-      ((await heading.count()) > 0 && "rendered"),
-    "the moved worktree to report unavailable or render the pinned review",
+      ((await heading.count()) > 0 && "rendered") ||
+      ((await failed.count()) > 0 && "failed"),
+    "the moved worktree to report unavailable, render the pinned review, or fail",
   );
 
-  ctx.check(
-    outcome === "unavailable"
-      ? "a moved worktree is reported as unavailable"
-      : "a moved worktree still renders from the pinned checkout",
-  );
+  if (outcome === "failed") {
+    assert.ok(
+      staleRead(),
+      "the canvas failed for a reason other than the stale repository path",
+    );
+    await ctx.knownBug(MOVED_BUG);
+  } else
+    ctx.check(
+      outcome === "unavailable"
+        ? "a moved worktree is reported as unavailable"
+        : "a moved worktree still renders from the pinned checkout",
+    );
 
   const info = await ctx.cliRaw(
-    ["info", "--review", review.reviewId, "--json"],
+    ["info", "--session", review.reviewId, "--json"],
     moved,
   );
 
-  assert.equal(info.code, 0, `review info: ${info.stdout}\n${info.stderr}`);
+  assert.equal(info.code, 0, `whiteboard info: ${info.stdout}\n${info.stderr}`);
   assert.match(
     info.stdout,
     new RegExp(review.reviewId),
-    `review info named no review: ${info.stdout}`,
+    `whiteboard info named no review: ${info.stdout}`,
   );
   ctx.check("info resolves a review whose worktree moved");
 
@@ -151,36 +175,50 @@ export async function run(ctx) {
   await ctx.restartDesktop();
   await openHome(ctx);
   await ctx.page
-    .locator("main.review-home .review-home-card")
+    .locator("main.review-home")
+    .getByRole("region", { name: "Sessions", exact: true })
+    .locator("tbody tr")
     .filter({ hasText: TITLE })
+    .getByTitle(TITLE, { exact: true })
     .click();
 
   const deleted = canvasUi(ctx);
 
   // `Worktree unavailable` belongs to the source-file view this path never opens, so the document is the only outcome.
-  await until(
-    async () => (await deleted.heading.count()) > 0,
-    "the deleted worktree to render the stored document",
+  const afterDelete = await until(
+    async () =>
+      ((await deleted.heading.count()) > 0 && "rendered") ||
+      ((await deleted.failed.count()) > 0 && "failed"),
+    "the deleted worktree to render the stored document or fail",
   );
+
+  if (afterDelete === "failed") {
+    assert.ok(
+      staleRead(),
+      "the canvas failed for a reason other than the stale repository path",
+    );
+    await ctx.knownBug(MOVED_BUG);
+
+    return;
+  }
 
   // Nothing is left to read from, so the retained document has to say so rather than pass for a current one.
   await deleted.retained.waitFor();
+  await deleted.dismiss.waitFor();
 
-  const views = ctx.page.locator('[aria-label="Review views"]');
+  const views = ctx.page.locator('[aria-label="Session views"]');
 
   await views.locator('button[aria-label="Commits"]').click();
 
   const commits = ctx.page.locator(".review-view-region--commits");
 
-  await commits
-    .getByRole("heading", { name: "Commits unavailable", exact: true })
-    .waitFor();
+  await deleted.retained.waitFor();
   assert.equal(
     await commits.getByText(/\d+ commits/).count(),
     0,
     "the Commits tab counted commits although the checkout is gone",
   );
   ctx.check(
-    "a deleted worktree renders the retained document with its banner, and Commits says it is unavailable",
+    "a deleted worktree renders the retained document under a banner with Dismiss, and Commits lists nothing",
   );
 }

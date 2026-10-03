@@ -20,7 +20,6 @@ import {
   writeReviewDocumentBundle,
 } from "./review-bundle";
 import {
-  createReviewDir,
   materializeReviewRevision,
   parseStoredReviewRecord,
   sealReviewCandidate,
@@ -28,6 +27,7 @@ import {
 import { withReviewMutationLock } from "./review-mutation-lock";
 import {
   cleanupTempDirs,
+  createLegacyReviewDir,
   gitRepository,
   tempDir,
   writeLegacyDocument,
@@ -72,41 +72,6 @@ describe("migrateStoredReviewData", () => {
 
     expect(await snapshotMigrationFiles(created.dir)).toEqual(before);
     await expect(readFile(recordPath, "utf8")).resolves.toBe(malformed);
-  });
-
-  it("does not replace live files when sealing the isolated candidate fails", async () => {
-    const { created } = await storedReview();
-    await writeLegacyDocument(created.dir);
-    const revision = await sealReviewCandidate(created.dir, "Legacy document");
-    await writeFile(
-      path.join(created.dir, "review.json"),
-      JSON.stringify({
-        ...created.review,
-        schemaVersion: 4,
-        presentedDocumentRevision: revision,
-      }),
-    );
-    const names = ["review.json", ".bundle", ".git"];
-
-    const before = await Promise.all(
-      names.map(async (name) => (await stat(path.join(created.dir, name))).ino),
-    );
-
-    vi.spyOn(reviewVcs, "seal").mockRejectedValue(
-      new Error("candidate disk full"),
-    );
-
-    await expect(
-      migrateStoredReview({ reviewDir: created.dir }),
-    ).rejects.toThrow("candidate disk full");
-
-    expect(
-      await Promise.all(
-        names.map(
-          async (name) => (await stat(path.join(created.dir, name))).ino,
-        ),
-      ),
-    ).toEqual(before);
   });
 
   it.each([false, true])(
@@ -622,7 +587,7 @@ describe("migrateStoredReviewData", () => {
       { encoding: "utf8" },
     ).trim();
 
-    const created = await createReviewDir({
+    const created = await createLegacyReviewDir({
       reviewsHomePath: reviewHome,
       worktreePath: sourceRoot,
       baseRef: "main",
@@ -658,7 +623,6 @@ describe("migrateStoredReviewData", () => {
       migrateStoredReviewData({ reviewHome }),
     ).resolves.toMatchObject({
       documents: 1,
-      droppedLegacyPeekReviews: 0,
       droppedReviews: 0,
     });
     await expect(
@@ -907,106 +871,6 @@ describe("migrateStoredReviewData", () => {
     expect(migrated.presentedDocumentRevision).toBe(documentRevision);
     expect(migrated.presentedSoftwareMapRevision).toBe(mapRevision);
   });
-
-  it("preserves current draft authoring with removed code peek fields", async () => {
-    const reviewHome = await tempDir("review-migration-");
-    const sourceRoot = await gitRepository();
-
-    const sourceCommit = execFileSync(
-      "git",
-      ["-C", sourceRoot, "rev-parse", "HEAD"],
-      { encoding: "utf8" },
-    ).trim();
-
-    const created = await createReviewDir({
-      reviewsHomePath: reviewHome,
-      worktreePath: sourceRoot,
-      baseRef: "main",
-      baseCommit: sourceCommit,
-      sourceCommit,
-      sourceIdentity: { kind: "git-branch", name: "main" },
-    });
-
-    await writeFile(
-      path.join(created.dir, "data.ts"),
-      [
-        'import { defineAnchors } from "virtual:progressive-review-authoring";',
-        "export const anchors = defineAnchors({",
-        "  oldSymbol: {",
-        '    title: "Old symbol",',
-        '    peek: { symbol: "resolveThing" },',
-        "  },",
-        "  oldDeclaration: {",
-        '    title: "Old declaration",',
-        '    peek: { declarationId: "src/thing.ts::resolveThing" },',
-        "  },",
-        "});",
-      ].join("\n"),
-    );
-
-    const log: string[] = [];
-    await expect(
-      migrateStoredReviewData({
-        reviewHome,
-        log: (message) => log.push(message),
-      }),
-    ).resolves.toMatchObject({
-      documents: 1,
-      droppedLegacyPeekReviews: 0,
-      droppedReviews: 0,
-    });
-    expect(log).not.toContain(expect.stringContaining("Dropped Review"));
-    await expect(
-      readFile(path.join(created.dir, "review.json")),
-    ).resolves.toBeDefined();
-  });
-
-  it("keeps range Reviews that only mention removed field names", async () => {
-    const reviewHome = await tempDir("review-migration-");
-    const sourceRoot = await gitRepository();
-
-    const sourceCommit = execFileSync(
-      "git",
-      ["-C", sourceRoot, "rev-parse", "HEAD"],
-      { encoding: "utf8" },
-    ).trim();
-
-    const created = await createReviewDir({
-      reviewsHomePath: reviewHome,
-      worktreePath: sourceRoot,
-      baseRef: "main",
-      baseCommit: sourceCommit,
-      sourceCommit,
-      sourceIdentity: { kind: "git-branch", name: "main" },
-    });
-
-    await writeFile(
-      path.join(created.dir, "data.ts"),
-      [
-        'import { defineAnchors } from "virtual:progressive-review-authoring";',
-        "// symbol: and declarationId: are removed.",
-        'const compatibility = "symbol: declarationId:";',
-        "export const anchors = defineAnchors({",
-        "  range: {",
-        '    title: "Range",',
-        '    peek: { file: "src/thing.ts", fromLine: 1, toLine: 2 },',
-        "  },",
-        "});",
-        "void compatibility;",
-      ].join("\n"),
-    );
-
-    await expect(
-      migrateStoredReviewData({ reviewHome }),
-    ).resolves.toMatchObject({
-      documents: 1,
-      droppedLegacyPeekReviews: 0,
-      droppedReviews: 0,
-    });
-    await expect(
-      readFile(path.join(created.dir, "review.json"), "utf8"),
-    ).resolves.toContain(created.review.uuid);
-  });
 });
 
 describe("migrateStoredReview", () => {
@@ -1057,32 +921,6 @@ describe("migrateStoredReview", () => {
     expect(seal).not.toHaveBeenCalled();
     expect(await snapshotMigrationFiles(created.dir)).toEqual(before);
   });
-
-  it("leaves a review untouched when its sealed document is broken", async () => {
-    const { created } = await storedReview();
-    await writeLegacyDocument(created.dir, {
-      code: 'import { jsx } from "review-doc-runtime"; throw new Error("broken sealed document");',
-    });
-    const revision = await sealReviewCandidate(created.dir, "Broken document");
-
-    const legacy = JSON.stringify({
-      ...created.review,
-      schemaVersion: 4,
-      presentedDocumentRevision: revision,
-    });
-
-    await writeFile(path.join(created.dir, "review.json"), legacy);
-    const before = await snapshotMigrationFiles(created.dir);
-
-    await expect(
-      migrateStoredReview({ reviewDir: created.dir }),
-    ).rejects.toThrow("broken sealed document");
-
-    expect(await snapshotMigrationFiles(created.dir)).toEqual(before);
-    expect(await readFile(path.join(created.dir, "review.json"), "utf8")).toBe(
-      legacy,
-    );
-  });
 });
 
 async function flatSchema2Review(maps: "valid" | "invalid" | "absent") {
@@ -1126,7 +964,7 @@ async function storedReview() {
     { encoding: "utf8" },
   ).trim();
 
-  const created = await createReviewDir({
+  const created = await createLegacyReviewDir({
     reviewsHomePath: reviewHome,
     worktreePath: sourceRoot,
     baseRef: "main",

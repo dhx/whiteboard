@@ -33,14 +33,18 @@ const THEME_SETTINGS = {
   },
 };
 
-/** The telemetry checkbox, reached through its row: the row label is a `<span>`, so `getByLabel` matches nothing. */
+/** The telemetry checkbox, the only one in the Privacy section. */
 const telemetryToggle = (settings) =>
-  settings
-    .locator(".review-settings-row")
-    .filter({ hasText: "Share anonymous usage data" })
-    .locator('input[type="checkbox"]');
+  settings.getByRole("region", { name: "Privacy" }).getByRole("checkbox");
 
-const themeSelect = (settings) => settings.getByLabel("Theme");
+/** The theme radio group's checked choice, lower-cased to match THEME_SETTINGS. */
+const themeChoice = async (settings) =>
+  (
+    await settings
+      .getByRole("radiogroup", { name: "Theme" })
+      .locator('[aria-checked="true"]')
+      .innerText()
+  ).toLowerCase();
 
 /** Writes the unreadable record into `<home>/reviews/<uuid>/review.json`. */
 async function seedLegacyReview(home) {
@@ -111,12 +115,14 @@ export async function run(ctx) {
     `review.telemetry.enabled to be ${!before} in the workbench settings`,
   );
 
-  const theme =
-    (await themeSelect(settings).inputValue()) === "light" ? "dark" : "light";
+  const theme = (await themeChoice(settings)) === "light" ? "dark" : "light";
 
-  await themeSelect(settings).selectOption(theme);
+  await settings
+    .getByRole("radiogroup", { name: "Theme" })
+    .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
+    .click();
   await until(
-    async () => (await themeSelect(settings).inputValue()) === theme,
+    async () => (await themeChoice(settings)) === theme,
     `the theme control to read ${theme}`,
   );
   await until(() => {
@@ -136,7 +142,7 @@ export async function run(ctx) {
     "the telemetry toggle did not keep its value across the restart",
   );
   assert.equal(
-    await themeSelect(settings).inputValue(),
+    await themeChoice(settings),
     theme,
     "the theme control did not keep its value across the restart",
   );
@@ -171,7 +177,7 @@ export async function run(ctx) {
   const home = ctx.page.locator("main.review-home");
 
   // The onboarding rail is what an empty Home renders, so waiting for it makes the absences below mean "finished", not "slow".
-  await home.getByText("Create your first review").waitFor({ timeout: 60000 });
+  await home.getByText("Create your first session").waitFor({ timeout: 60000 });
 
   const summaries = await ctx.api("/reviews-api");
 
@@ -193,7 +199,7 @@ export async function run(ctx) {
   if (homeText.includes(LEGACY_UUID)) {
     assert.match(
       homeText,
-      /review migrate apply/,
+      /whiteboard migrate apply/g,
       "Home named the unreadable review but not the command to run",
     );
     ctx.check(
@@ -202,7 +208,7 @@ export async function run(ctx) {
   } else {
     assert.doesNotMatch(
       homeText,
-      /review migrate apply/,
+      /whiteboard migrate apply/g,
       "Home offered migration guidance without naming the review it is about",
     );
     ctx.check(
@@ -244,19 +250,19 @@ export async function run(ctx) {
     new RegExp(
       `${LEGACY_UUID}: current artifact migration failed: Unsupported Review schema; the record was preserved\\.`,
     ),
-    `review migrate apply did not report the record: ${output}`,
+    `whiteboard migrate apply did not report the record: ${output}`,
   );
   assert.equal(
     migrate.code,
     1,
-    `review migrate apply reported a blocker but exited ${migrate.code}: ${output}`,
+    `whiteboard migrate apply reported a blocker but exited ${migrate.code}: ${output}`,
   );
   assert.deepEqual(
     await storedRecord(legacyDir),
     LEGACY_RECORD,
-    "review migrate apply changed the record it reported as preserved",
+    "whiteboard migrate apply changed the record it reported as preserved",
   );
   ctx.check(
-    "`review migrate apply` is the one place the unreadable record is reported, and it preserves it",
+    "`whiteboard migrate apply` is the one place the unreadable record is reported, and it preserves it",
   );
 }

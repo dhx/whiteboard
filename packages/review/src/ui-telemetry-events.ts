@@ -108,6 +108,7 @@ export const LS_GROUP = ["python", "go", "rust", "swift", "csharp"] as const;
 export const EXTENSION_ID = [
   "vscodevim.vim",
   "tuttieee.emacs-mcx",
+  "ms-vscode.sublime-keybindings",
   "ms-python.python",
   "astral-sh.ty",
   "charliermarsh.ruff",
@@ -132,12 +133,14 @@ export const EXTENSION_INSTALL_PHASE = ["download", "install"] as const;
 export const SETTING_NAME = [
   "telemetry_enabled",
   "keymap",
-  "dismissed_retention_days",
   "software_map_enabled",
   "scratchpad_enabled",
   "diffr_config",
   "structural_diff",
   "theme",
+  "ctrl_tab",
+  "ready_notification",
+  "document_width",
 ] as const;
 
 export const REVIEW_OPENED_VIA = ["home", "cli", "other"] as const;

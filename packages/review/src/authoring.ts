@@ -71,7 +71,7 @@ export interface ReviewDefinitionDiagnostic {
   code: "software-map-unavailable";
   level: "info";
   message: string;
-  remediation: "review map";
+  remediation: "whiteboard map";
   component?: "SoftwareMap";
   path?: readonly string[];
 }
@@ -80,8 +80,6 @@ export const actorInputSchema = z.strictObject({
   label: nonEmptyStringSchema,
   softwareMapPath: optionalNonEmptyStringSchema,
 });
-
-export type ActorInput = z.infer<typeof actorInputSchema>;
 
 export const actorInputMapSchema = z.record(
   nonEmptyStringSchema,
@@ -140,8 +138,6 @@ export const codePeekRangeInputSchema = z
     path: ["toLine"],
     message: "Must be greater than or equal to fromLine",
   });
-
-export type CodePeekRangeInput = z.infer<typeof codePeekRangeInputSchema>;
 
 export const codePeekPropsSchema = codePeekRangeInputSchema;
 
@@ -218,16 +214,6 @@ export const sequenceDiagramPropsSchema = z.strictObject({
 });
 
 export type SequenceDiagramProps = z.infer<typeof sequenceDiagramPropsSchema>;
-
-export function isAnchorRef(value: unknown): value is AnchorRef {
-  return anchorRefSchema.safeParse(value).success;
-}
-
-export function isPeekableAnchorRef(
-  value: unknown,
-): value is PeekableAnchorRef {
-  return peekableAnchorRefSchema.safeParse(value).success;
-}
 
 export type AnchorRefFor<T extends AnchorInputMap[string]> = AnchorRef &
   (T extends { peek: CodePeekProps } ? { peek: DiffSelection } : unknown);
@@ -363,8 +349,6 @@ export const dbOperationPropsSchema = z.union([
   dbReadPropsSchema,
   dbWritePropsSchema,
 ]);
-
-export type DbOperationProps = z.infer<typeof dbOperationPropsSchema>;
 
 // Only the identifying fields are parsed: `z.custom` keeps the store handle's
 // identity, and with it the collection refs hanging off it.
@@ -960,9 +944,9 @@ export function createReviewDefinitionSession(
       level: "info",
       message:
         "component" in context
-          ? "Document uses SoftwareMap but no software map is materialized for this repo; author one with `review map` or remove the section."
-          : "Definition references softwareMapPath but no software map is materialized for this repo; author one with `review map` or remove the reference.",
-      remediation: "review map",
+          ? "Document uses SoftwareMap but no software map is materialized for this repo; author one with `whiteboard map` or remove the section."
+          : "Definition references softwareMapPath but no software map is materialized for this repo; author one with `whiteboard map` or remove the reference.",
+      remediation: "whiteboard map",
       ...("component" in context
         ? { component: context.component }
         : { path: context.path.map(String) }),

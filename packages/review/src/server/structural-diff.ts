@@ -9,12 +9,13 @@ import {
   type StructuralProblem,
   decodeStructuralDiffEvent,
 } from "@dev.fast/review-protocol";
-
-import { findReviewPackageRoot } from "../package-paths";
+import { findReviewPackageRoot } from "@review/package-paths";
 
 export type DiffComparison =
   | { kind: "trees"; base: string; head: string }
-  | { kind: "merge-base"; base: string; head: string };
+  | { kind: "merge-base"; base: string; head: string }
+  // The revision separates cached streams after a working-file save.
+  | { kind: "worktree"; base: string; revision: string };
 
 export interface StructuralDiffRequest {
   repositoryPath: string;
@@ -27,14 +28,19 @@ export function diffrExecutable(
   packageRoot = findReviewPackageRoot(import.meta.url),
 ): string {
   if (process.env.REVIEW_DIFFR_BINARY) return process.env.REVIEW_DIFFR_BINARY;
-  const bundled = path.join(packageRoot, "bin", "diffr");
+
+  const bundled = path.join(
+    packageRoot,
+    "bin",
+    process.platform === "win32" ? "diffr.exe" : "diffr",
+  );
 
   return existsSync(bundled) ? bundled : "diffr";
 }
 
 export function diffrMissingError(): Error {
   return new Error(
-    `Cannot find diffr at ${diffrExecutable()}. Review Desktop bundles it at bin/diffr under its runtime; in a checkout, run \`pnpm --filter @dev.fast/review ensure:diffr\` or install diffr on PATH, or set REVIEW_DIFFR_BINARY to its executable.`,
+    `Cannot find diffr at ${diffrExecutable()}. Whiteboard Desktop bundles it at bin/diffr under its runtime; in a checkout, run \`pnpm --filter @dev.fast/review ensure:diffr\` or install diffr on PATH, or set REVIEW_DIFFR_BINARY to its executable.`,
   );
 }
 
@@ -47,7 +53,7 @@ export async function* structuralDiff(
   input: StructuralDiffRequest,
 ): AsyncGenerator<StructuralDiffEvent> {
   input.signal.throwIfAborted();
-  const { base, head, kind } = input.comparison;
+  const comparison = input.comparison;
 
   const args = [
     "--repo",
@@ -57,7 +63,17 @@ export async function* structuralDiff(
     "--stream-annotations",
   ];
 
-  args.push(...(kind === "trees" ? [base, head] : [`${base}...${head}`]));
+  switch (comparison.kind) {
+    case "worktree":
+      args.push(comparison.base);
+      break;
+    case "trees":
+      args.push(comparison.base, comparison.head);
+      break;
+    case "merge-base":
+      args.push(`${comparison.base}...${comparison.head}`);
+  }
+
   args.push("--", ...(input.paths ?? []));
 
   const idleAbort = new AbortController();

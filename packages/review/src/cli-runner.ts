@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Writable } from "node:stream";
@@ -5,12 +7,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   StoreApiError,
+  processIsAlive,
   readStoreAuth,
   withStoreAuthorization,
 } from "@dev.fast/trace-core";
 import {
   type CliInputStream,
   DEFAULT_STORE_ORIGIN,
+  DEV_REVIEW_HOME_ENV,
   emitJsonEvent,
   humanStream,
   jsonRequestedInArgv,
@@ -32,10 +36,14 @@ import {
 } from "@dev.fast/trace-core";
 import { Argument, Command, CommanderError, Option } from "commander";
 
-import { isOwnedShim, pathShimPath } from "./cli-install";
+import {
+  isOwnedShim,
+  pathShimPath,
+  windowsInstallerCommand,
+} from "./cli-install";
 import { cliRuntimeInfo, describeCliRuntime } from "./cli-runtime-info";
 import { connectPrompts } from "./connect-prompts";
-import { selectReviewInstance } from "./desktop-discovery";
+import { readReviewInstances, selectReviewInstance } from "./desktop-discovery";
 import {
   ALL_INSTALL_TARGETS,
   type InstallTarget,
@@ -43,7 +51,10 @@ import {
 } from "./install";
 import { scanLegacySkills } from "./legacy-skills";
 import { runReviewMigration } from "./migrate";
-import { readReviewPackageVersion } from "./package-paths";
+import {
+  findReviewPackageRoot,
+  readReviewPackageVersion,
+} from "./package-paths";
 import { reviewAgentCliHelp } from "./review-api/agent-cli";
 import { type ReviewAppEvent, runReviewAppPick } from "./review-app";
 import {
@@ -67,6 +78,7 @@ import {
 } from "./review-telemetry";
 import {
   readReviewServerDiscovery,
+  readReviewServerHealth,
   reviewServerIsHealthy,
   reviewServerStateDir,
   serverNotReady,
@@ -219,16 +231,16 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     .name("whiteboard")
     .enablePositionalOptions()
     .version(cliVersion)
-    .description("Create, publish, and open dev.fast Reviews.")
+    .description("Create and open dev.fast reviews.")
     .addHelpText("after", reviewTopLevelHelp());
 
-  // Tolerate the leading form (`review --json scaffold`) as well as the usual
+  // Tolerate the leading form (`whiteboard --json scaffold`) as well as the usual
   // trailing one. Never give this a .default(): optsWithGlobals merges globals
   // over locals, so a default would clobber a subcommand's own true.
   program.addOption(new Option("--json").hideHelp());
   program.option(
     "--state-dir <path>",
-    "select headless Review state for server, api, and mcp",
+    "select headless Whiteboard state for server, api, and mcp",
   );
   program.exitOverride();
 
@@ -242,7 +254,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   const serverCommand = configureOutput(
     program
       .command("server")
-      .description("Run Review authoring without Desktop"),
+      .description("Run review authoring without Desktop"),
     "plain",
   );
 
@@ -303,7 +315,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
           input.stdout.write(
             options.json
               ? `${JSON.stringify({ event: "server.ready", url, serverPid, stateDir })}\n`
-              : `Review server ready at ${url}\nSaved reviews: ${stateDir}\n`,
+              : `Whiteboard server ready at ${url}\nSaved reviews: ${stateDir}\n`,
           );
         },
       });
@@ -330,21 +342,107 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
 
     const stateDir = reviewServerStateDir(authoringEnv(options.stateDir));
     const discovery = await readReviewServerDiscovery(stateDir);
+    const health = discovery && (await readReviewServerHealth(discovery));
 
-    if (!discovery || !(await reviewServerIsHealthy(discovery)))
-      throw serverNotReady(stateDir);
+    if (!discovery || !health) throw serverNotReady(stateDir);
     const { url, serverPid } = discovery;
+    const { version, serverId } = health;
     input.stdout.write(
       options.json
-        ? `${JSON.stringify({ event: "server.status", ready: true, url, serverPid, stateDir })}\n`
-        : `Review server ready at ${url}\nSaved reviews: ${stateDir}\n`,
+        ? `${JSON.stringify({ event: "server.status", ready: true, url, serverPid, stateDir, version, serverId })}\n`
+        : `Whiteboard server ready at ${url}\nSaved reviews: ${stateDir}\n`,
+    );
+  });
+
+  configureJsonOutput(
+    serverCommand
+      .command("reset-id")
+      .description(
+        "Give this machine's saved reviews a new server id; stop the server first",
+      )
+      .option(
+        "--state-dir <path>",
+        "directory selected when starting the server",
+      ),
+    "plain",
+  ).action(async (_options, command: Command) => {
+    const options = command.optsWithGlobals<{
+      stateDir?: string;
+      json?: boolean;
+    }>();
+
+    const stateDir = reviewServerStateDir(authoringEnv(options.stateDir));
+
+    if (!existsSync(path.join(stateDir, "review-api.db")))
+      throw new Error(
+        `No saved reviews in ${stateDir}, so there is no server id to reset. Check --state-dir.`,
+      );
+
+    // Any live Desktop holds the store, attached window or not. Only a gone
+    // process counts as stopped: a paused or busy one may not answer /health.
+    const desktops = await readReviewInstances({
+      env: { ...env, [DEV_REVIEW_HOME_ENV]: stateDir },
+    });
+
+    const [problem] = desktops.broken.values();
+
+    if (problem)
+      throw new Error(
+        `Cannot tell whether a Whiteboard Desktop is using ${stateDir}: ${problem.message}`,
+      );
+
+    const inUse = () =>
+      new Error(
+        `A Whiteboard server is using ${stateDir}. Stop it first, then run whiteboard server reset-id again.`,
+      );
+
+    if (
+      desktops.instances.some(({ discovery }) =>
+        [discovery.appPid, discovery.serverPid].some((pid) =>
+          processIsAlive(pid),
+        ),
+      )
+    )
+      throw inUse();
+
+    const [{ openReviewProfile }, { withHeadlessServerLock }] =
+      await Promise.all([
+        import("./review-api/profile.js"),
+        import("./server/headless-host.js"),
+      ]);
+
+    // The headless server's own lock (at the path it resolves): refused while
+    // a live server holds it, and no server can start during the reset.
+    const reset = await withHeadlessServerLock(
+      await realpath(stateDir),
+      async () => {
+        const local = await openReviewProfile(stateDir, {
+          manageWorkspaces: false,
+        });
+
+        try {
+          return local.store.resetServerId();
+        } finally {
+          await local.data.close();
+          await local.store.close();
+        }
+      },
+    );
+
+    if (!reset.acquired) throw inUse();
+    const serverId = reset.result;
+
+    input.stdout.write(
+      options.json
+        ? `${JSON.stringify({ event: "server.reset-id", serverId, stateDir })}\n`
+        : `New server id ${serverId}\nSaved reviews: ${stateDir}\n`,
     );
   });
 
   configureJsonOutput(
     program
       .command("version")
-      .description("Print Review package version")
+      .description("Print Whiteboard package version")
       .option("--verbose", "Show executing CLI paths and build identity"),
     "plain",
   ).action(async (options: { verbose?: boolean }, command: Command) => {
@@ -427,8 +525,15 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     state.exitCode = 0;
   };
 
-  const launchApp = async (options: { focus?: boolean; json?: boolean }) => {
-    const event = await runtime.runReviewAppLaunch({ focus: options.focus });
+  const launchApp = async (options: {
+    focus?: boolean;
+    json?: boolean;
+    sandbox?: boolean;
+  }) => {
+    const event = await runtime.runReviewAppLaunch({
+      focus: options.focus,
+      noSandbox: options.sandbox === false,
+    });
 
     writeAppEvent(event, options);
     state.exitCode = 0;
@@ -438,7 +543,11 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     program
       .command("app")
       .description("Start Whiteboard Desktop in the background")
-      .option("--focus", "bring Whiteboard Desktop to the foreground"),
+      .option("--focus", "bring Whiteboard Desktop to the foreground")
+      .option(
+        "--no-sandbox",
+        "disable the Chromium sandbox for a Linux container",
+      ),
     "plain",
   ).action(launchApp);
 
@@ -446,13 +555,17 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     app
       .command("launch")
       .description("Start Whiteboard Desktop in the background")
-      .option("--focus", "bring Whiteboard Desktop to the foreground"),
+      .option("--focus", "bring Whiteboard Desktop to the foreground")
+      .option(
+        "--no-sandbox",
+        "disable the Chromium sandbox for a Linux container",
+      ),
     "plain",
   ).action(launchApp);
   configureJsonOutput(
     app
       .command("pick")
-      .description("Select a Review (interactive picker without --session)")
+      .description("Select a review (interactive picker without --session)")
       .option("--session <uuid>", "review UUID")
       .option("--focus", "bring Whiteboard Desktop to the foreground"),
     "plain",
@@ -468,7 +581,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   const instances = configureJsonOutput(
     program
       .command("instances")
-      .description("List running Reviews and the one commands use"),
+      .description("List running reviews and the one commands use"),
     "plain",
   ).action(async (_options: { json?: boolean }, command: Command) => {
     await listReviewInstancesCommand(instanceOutput(command));
@@ -497,12 +610,12 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   });
 
   configureJsonOutput(
-    program.command("info").description("Print Review information"),
+    program.command("info").description("Print review information"),
     "plain",
   )
     .option("--all", "list active reviews for every worktree in this repo")
     .addOption(
-      new Option("--session <uuid>", "select a Review").conflicts("all"),
+      new Option("--session <uuid>", "select a review").conflicts("all"),
     )
     .action(async (options: ReviewInfoOptions) => {
       const event = await runtime.runReviewInfo({
@@ -530,6 +643,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
           "opencode",
           "pi",
           "omp",
+          "copilot",
           "all",
         ]),
       ),
@@ -543,7 +657,12 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
 
     const prompts = connectPrompts({
       legacyPaths: await scanLegacySkills(homeDir),
-      hasShim: await isOwnedShim(pathShimPath(homeDir)),
+      hasShim:
+        (await isOwnedShim(pathShimPath(homeDir))) ||
+        (await windowsInstallerCommand(
+          findReviewPackageRoot(import.meta.url),
+          env,
+        )) !== undefined,
       traceEnabled: await traceMachineEnabled({ homeDir, env }),
       fffBinaryPath: path.join(homeDir, ".local", "bin", "fff-mcp"),
       fffCorpusRoot: path.join(devHome, "trace-search"),
@@ -576,14 +695,14 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   });
 
   const migrate = configureOutput(
-    program.command("migrate").description("Migrate legacy Review data"),
+    program.command("migrate").description("Migrate legacy review data"),
     "plain",
   );
 
   configureJsonOutput(
     migrate
       .command("apply")
-      .description("Apply the legacy Review migration")
+      .description("Apply the legacy review migration")
       .option("--force", "restart an interrupted migration"),
     "plain",
   ).action(async (options: { force?: boolean; json?: boolean }) => {
@@ -604,7 +723,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
       ),
     "plain",
   )
-    .option("--review <id>", "Review ID")
+    .option("--review <id>", "review ID")
     .option("--version <number>", "Saved version to share")
     .option("--preview", "Open the share link in Whiteboard Preview by default")
     .option(
@@ -646,10 +765,10 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   // Hosted trace store login. Logging in authenticates a user; it selects
   // no storage by itself.
   configureJsonOutput(
-    program.command("login").description("Log in to Review with GitHub"),
+    program.command("login").description("Log in to Whiteboard with GitHub"),
     "plain",
   )
-    .option("--origin <url>", "Review service origin", DEFAULT_STORE_ORIGIN)
+    .option("--origin <url>", "Whiteboard service origin", DEFAULT_STORE_ORIGIN)
     .option("--traces", "Also authorize GitHub repositories for hosted traces")
     .option("--no-browser", "Print the URL instead of opening a browser")
     .action(
@@ -709,7 +828,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
     stderr: input.stderr,
     configureOutput: (command) => configureOutput(command, "plain"),
     configureJsonOutput: (command) => configureJsonOutput(command, "plain"),
-    verifyCommand: "review trace status",
+    verifyCommand: "whiteboard trace status",
     setExitCode: (code) => {
       state.exitCode = code;
     },
@@ -815,8 +934,8 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
   // share the top-level help, the leading `--json` form, and the telemetry
   // hooks without a separate parser.
   for (const [name, description] of [
-    ["api", "Call a JSON Review authoring tool on the running server"],
-    ["mcp", "Serve the JSON Review authoring tools over stdio MCP"],
+    ["api", "Call a JSON review authoring tool on the running server"],
+    ["mcp", "Serve the JSON review authoring tools over stdio MCP"],
   ] as const) {
     configureOutput(
       program
@@ -979,7 +1098,7 @@ export async function runReviewCli(input: ReviewCliInput): Promise<number> {
         error.code === "repository_authorization_required"
       ) {
         serialized.code = error.code;
-        serialized.remedy = "review login --traces";
+        serialized.remedy = "whiteboard login --traces";
       }
 
       emitReviewEvent(input.stdout, { event: "error", error: serialized });
@@ -1008,6 +1127,7 @@ const TARGET_LABELS: Record<InstallTarget, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   omp: "oh-my-pi",
+  copilot: "Copilot CLI",
 };
 
 function parseTargets(targets: readonly string[]): InstallTarget[] {
@@ -1063,18 +1183,17 @@ function reviewCliRuntime(
 function reviewTopLevelHelp(): string {
   return [
     "",
-    "Use `review info` to discover Review documents for this checkout.",
+    "Use `whiteboard info` to discover review documents for this checkout.",
     "Reviews are authored through the JSON API: `whiteboard api tools` lists the tools, and `whiteboard mcp` serves the same catalog to an agent.",
-    "Use `review app launch` to start Whiteboard Desktop. Use `review app pick --review <uuid>` to open one.",
-    "Use `review server start` for headless authoring, and `review server status --json` to check readiness.",
-    "Use `--view <review|commits|diff|map|trace>` with `review app pick` to choose the opened tab.",
+    "Use `whiteboard app launch` to start Whiteboard Desktop. Use `whiteboard app pick --session <uuid>` to open one.",
+    "Use `whiteboard server start` for headless authoring, and `whiteboard server status --json` to check readiness.",
     "",
     "Every command accepts --json. Stdout then carries only JSON events, one per line,",
     "human progress moves to stderr, and a failure prints a JSON error event too.",
     "",
     "Example agent prompt (for a repository that provides a CI/CD system):",
     "",
-    "  Can you use Review to explain this repository's CI/CD system to me?",
+    "  Can you use Whiteboard to explain this repository's CI/CD system to me?",
     "",
     "  My current understanding:",
     "",
@@ -1249,10 +1368,6 @@ function errorClassification(
 
   if (command === "info") {
     return { errorName: "review_state_error", errorCategory: "local_state" };
-  }
-
-  if (command.startsWith("map.") || command.startsWith("cache.")) {
-    return { errorName: "repository_error", errorCategory: "local_state" };
   }
 
   if (cause) {

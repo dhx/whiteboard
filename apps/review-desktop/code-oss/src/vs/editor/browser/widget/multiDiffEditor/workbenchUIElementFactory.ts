@@ -16,12 +16,19 @@ import type { IDiffCodeEditorWidgetOptions } from '../diffEditor/diffEditorWidge
  */
 export interface IWorkbenchUIElementFactory {
 	getResourceSectionId?(uris: Parameters<IResourceHeaderMetadata["setUris"]>[0]): string | undefined;
+	/** Keeps an item folded with no way to open it, e.g. a file with no text to diff. */
+	isResourceCollapseLocked?(uris: Parameters<IResourceHeaderMetadata["setUris"]>[0]): boolean;
 	createResourceSectionHeader?(element: HTMLElement, sticky?: boolean): IResourceHeaderMetadata & { readonly height: IObservable<number>; readonly bodyHidden: IObservable<boolean> };
 	createResourceLabel?(element: HTMLElement): IResourceLabel;
 	createResourceHeaderMetadata?(element: HTMLElement): IResourceHeaderMetadata;
 
 	/** Controls the outer multi-diff scroller for compact embedded hosts. */
 	readonly horizontalScrollbar?: 'auto' | 'hidden';
+	readonly bottomScrollPadding?: number;
+	/** Keep needed scrollbars visible even when the pointer is elsewhere. */
+	readonly alwaysShowScrollbars?: boolean;
+	/** Start the vertical scrollbar below a resource header pinned at the top. */
+	readonly scrollbarBelowResourceHeader?: boolean;
 
 	/**
 	 * External host for the inner editors' overflowing widgets (hover,

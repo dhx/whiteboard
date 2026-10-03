@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Build a sealed signed RPM/DNF publication without network writes."""
+"""Build a sealed signed RPM/DNF, DEB/APT and pacman publication without network writes."""
 
 import argparse
+from datetime import datetime, timezone
+import gzip
 import hashlib
 import json
 import os
@@ -24,13 +26,14 @@ def digest(file):
     return result.hexdigest()
 
 
-def sign(file, fingerprint):
-    output = file.with_name(file.name + ".asc")
+def sign(file, fingerprint, armor=True):
+    # DNF reads armored .asc; pacman reads binary .sig.
+    output = file.with_name(file.name + (".asc" if armor else ".sig"))
     args = ["gpg", "--batch", "--yes", "--local-user", fingerprint]
     passphrase = os.environ.get("REVIEW_SIGNING_PASSPHRASE_FILE")
     if passphrase:
         args += ["--pinentry-mode", "loopback", "--passphrase-file", passphrase]
-    run(*args, "--armor", "--output", str(output), "--detach-sign", str(file))
+    run(*args, *(["--armor"] if armor else []), "--output", str(output), "--detach-sign", str(file))
     run("gpg", "--batch", "--verify", str(output), str(file))
 
 
@@ -55,11 +58,70 @@ def sign_rpm(file, fingerprint, public_key):
             raise ValueError("RPM has no valid package signature")
 
 
+def build_apt(packages, repos, snapshot_root, package_name, version, revision, fingerprint, channel):
+    name = f"{package_name}_{version}-{revision}_amd64.deb"
+    source = packages / name
+    metadata = run("dpkg-deb", "--show", "--showformat=${Package}\\n${Version}\\n${Architecture}\\n", str(source)).decode().splitlines()
+    if metadata != [package_name, f"{version}-{revision}", "amd64"]:
+        raise ValueError("DEB metadata does not match the release")
+    apt = repos / "apt"
+    pool = apt / "pool/main"
+    pool.mkdir(parents=True)
+    shutil.copyfile(source, pool / name)
+    suite = f"dists/{channel}"
+    snapshot = snapshot_root / "apt" / suite
+    index = snapshot / "main/binary-amd64"
+    index.mkdir(parents=True)
+    (index / "Packages").write_bytes(run("apt-ftparchive", "packages", "pool", cwd=apt))
+    (index / "Packages.gz").write_bytes(gzip.compress((index / "Packages").read_bytes(), mtime=0))
+    hashes = apt / suite / "main/binary-amd64/by-hash/SHA256"
+    hashes.mkdir(parents=True)
+    entries = []
+    for file in sorted(index.iterdir()):
+        sha = digest(file)
+        shutil.copyfile(file, hashes / sha)
+        entries.append(f" {sha} {file.stat().st_size} main/binary-amd64/{file.name}")
+    release = snapshot / "Release"
+    date = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
+    release.write_text(f"Origin: dev.fast\nLabel: Whiteboard\nSuite: {channel}\nCodename: {channel}\n"
+                       f"Date: {date}\nArchitectures: amd64\nComponents: main\nAcquire-By-Hash: yes\n"
+                       + "SHA256:\n" + "\n".join(entries) + "\n")
+    args = ["gpg", "--batch", "--yes", "--local-user", fingerprint]
+    passphrase = os.environ.get("REVIEW_SIGNING_PASSPHRASE_FILE")
+    if passphrase:
+        args += ["--pinentry-mode", "loopback", "--passphrase-file", passphrase]
+    run(*args, "--digest-algo", "SHA256", "--output", str(snapshot / "InRelease"), "--clearsign", str(release))
+    run(*args, "--output", str(snapshot / "Release.gpg"), "--detach-sign", str(release))
+    run("gpg", "--batch", "--verify", str(snapshot / "InRelease"))
+    run("gpg", "--batch", "--verify", str(snapshot / "Release.gpg"), str(release))
+
+
+def build_arch(packages, repos, snapshot_root, package_name, version, revision, fingerprint):
+    name = f"{package_name}-{version}-{revision}-x86_64.pkg.tar.zst"
+    source = packages / name
+    info = run("tar", "--zstd", "-xOf", str(source), ".PKGINFO").decode()
+    fields = dict(line.split(" = ", 1) for line in info.splitlines() if " = " in line)
+    if [fields.get("pkgname"), fields.get("pkgver"), fields.get("arch")] != [package_name, f"{version}-{revision}", "x86_64"]:
+        raise ValueError("Arch package metadata does not match the release")
+    pool = repos / "arch/x86_64"
+    pool.mkdir(parents=True)
+    shutil.copyfile(source, pool / name)
+    sign(pool / name, fingerprint, armor=False)
+    # repo-add ran in the unprivileged build container. The databases name this
+    # exact package file, and the Worker redirects to them by generation.
+    snapshot = snapshot_root / "arch/x86_64"
+    snapshot.mkdir(parents=True)
+    for kind in ("db", "files"):
+        database = snapshot / f"{package_name}.{kind}"
+        shutil.copyfile(packages / f"{package_name}.{kind}.tar.gz", database)
+        sign(database, fingerprint, armor=False)
+
+
 # Each channel is a separate package in a separate repository. Preview builds
 # use RPM's tilde form so they sort below the stable release they precede.
 CHANNELS = {
-    "stable": ("dev-fast-review", "repos", r"[0-9]+\.[0-9]+\.[0-9]+"),
-    "preview": ("dev-fast-review-preview", "repos/preview", r"[0-9]+\.[0-9]+\.[0-9]+~preview\.[0-9]{8}\.[0-9]+"),
+    "stable": ("whiteboard", "repos", r"[0-9]+\.[0-9]+\.[0-9]+"),
+    "preview": ("whiteboard-preview", "repos/preview", r"[0-9]+\.[0-9]+\.[0-9]+~preview\.[0-9]{8}\.[0-9]+"),
 }
 
 
@@ -106,8 +168,10 @@ def build(packages, output, version, revision, commit, fingerprint, channel="sta
             raise ValueError(f"Unexpected or non-content-addressed RPM metadata: {file.name}")
     (rpm / "repodata/repomd.xml").rename(snapshot / "repomd.xml")
     sign(snapshot / "repomd.xml", fingerprint)
+    build_apt(packages, repos, repos / "snapshots" / generation, package_name, version, revision, fingerprint, channel)
+    build_arch(packages, repos, repos / "snapshots" / generation, package_name, version, revision, fingerprint)
     pointer = {
-        "schemaVersion": 1, "format": "rpm", "generation": generation, "version": version,
+        "schemaVersion": 1, "format": "rpm", "packageName": package_name, "deb": True, "arch": True, "generation": generation, "version": version,
         "commit": commit, "keyFingerprint": fingerprint,
     }
     (repos / "current.json").write_text(json.dumps(pointer) + "\n")

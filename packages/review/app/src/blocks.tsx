@@ -1,10 +1,18 @@
-import { Component, type ReactNode } from "react";
-
+import { fontSize, radius } from "@canvas/scale.stylex";
 import {
   type Block,
   type BlockType,
   traceQuoteLink,
-} from "../../src/review-api/document";
+} from "@review/review-api/document";
+import * as stylex from "@stylexjs/stylex";
+import {
+  Component,
+  type ReactNode,
+  createContext,
+  useContext,
+  useMemo,
+} from "react";
+
 import { MarkdownContent } from "./agent-markdown";
 import type { ApiDocumentData } from "./api-document";
 import { blockSectionSummary } from "./block-document-derivations";
@@ -13,10 +21,15 @@ import { RenderedCodeBlock } from "./code-block";
 import { CodePeekCard } from "./CodePeek";
 import { DatabaseLens } from "./database-lens";
 import { SequenceDiagram } from "./diagrams";
+import { documentStyles } from "./document-styles";
+import { useMotionPhase } from "./draw-queue-provider";
+import { drawStyles } from "./draw-styles";
 import { FlowDiagram } from "./flow-diagram";
+import { documentMarker } from "./markers.stylex";
 import { AnchorLink, ReviewSection } from "./review-components";
 import { ReviewDocumentTitle } from "./review-document-surface";
 import { SoftwareMap } from "./software-map/SoftwareMap";
+import { tokens } from "./tokens.stylex";
 import { TraceQuote } from "./trace-quote";
 import { TutorialAuthoringConversation } from "./tutorial-authoring-conversation";
 import {
@@ -53,10 +66,23 @@ export type BlockComponent<K extends BlockType> = (
   props: BlockProps<K>,
 ) => ReactNode;
 
+/** Saves a prose block's Markdown, where the shown document can be edited. */
+export const SaveMarkdown = createContext<
+  ((blockId: string, markdown: string) => void) | undefined
+>(undefined);
+
 function MarkdownBlock({ node, data }: BlockProps<"markdown">) {
+  const save = useContext(SaveMarkdown);
+
+  const onChange = useMemo(
+    () => save && ((markdown: string) => save(node.id, markdown)),
+    [save, node.id],
+  );
+
   return (
     <MarkdownContent
       source={node.markdown}
+      onChange={onChange}
       headingId={(index) => data.headings.get(node.id, index)}
       h1={ReviewDocumentTitle}
       renderLink={(href, children) => {
@@ -102,7 +128,7 @@ function CodeBlock({ node }: BlockProps<"code">) {
 }
 
 function DividerBlock() {
-  return <hr />;
+  return <hr {...stylex.props(drawStyles.blockChild)} />;
 }
 
 function SectionBlock({ node, data, children }: BlockProps<"section">) {
@@ -120,9 +146,27 @@ function SectionBlock({ node, data, children }: BlockProps<"section">) {
 }
 
 function CalloutBlock({ node, children }: BlockProps<"callout">) {
+  const retitled = useMotionPhase(node.id) === "retitle";
+
   return (
-    <blockquote data-tone={node.tone}>
-      {node.title && <strong data-review-copy-prose>{node.title}</strong>}
+    <blockquote
+      data-tone={node.tone}
+      {...stylex.props(
+        documentStyles.serif,
+        styles.callout,
+        styles[node.tone],
+        documentStyles.column,
+        drawStyles.blockChild,
+      )}
+    >
+      {node.title && (
+        <strong
+          data-review-copy-prose
+          {...stylex.props(retitled && drawStyles.retitle)}
+        >
+          {node.title}
+        </strong>
+      )}
       {children(node.children)}
     </blockquote>
   );
@@ -161,8 +205,12 @@ function DatabaseLensBlock({ node }: BlockProps<"database_lens">) {
 
 function ImageBlock({ node, data }: BlockProps<"image">) {
   return (
-    <figure className="review-image">
-      <img src={data.images.get(node.assetId)} alt={node.alt} />
+    <figure {...stylex.props(documentStyles.column, drawStyles.blockChild)}>
+      <img
+        src={data.images.get(node.assetId)}
+        alt={node.alt}
+        {...stylex.props(documentStyles.image)}
+      />
       {node.caption && <figcaption>{node.caption}</figcaption>}
     </figure>
   );
@@ -177,7 +225,18 @@ function TraceQuoteBlock({ node, data }: BlockProps<"trace_quote">) {
     trace?.events.findIndex((item) => item.id === node.eventId) ?? -1;
 
   if (!trace || event < 0)
-    return <blockquote data-unavailable="trace">{node.text}</blockquote>;
+    return (
+      <blockquote
+        data-unavailable="trace"
+        {...stylex.props(
+          documentStyles.serif,
+          documentStyles.column,
+          drawStyles.blockChild,
+        )}
+      >
+        {node.text}
+      </blockquote>
+    );
 
   return (
     <TraceQuote sessionId={node.traceId} event={event}>
@@ -204,19 +263,19 @@ function TutorialBlock({ node, children }: BlockProps<"tutorial">) {
   switch (node.kind) {
     case "keymap":
       return (
-        <div className="api-tutorial-control">
+        <div {...stylex.props(documentStyles.column, drawStyles.blockChild)}>
           <TutorialKeymapPicker />
         </div>
       );
     case "conversation":
       return (
-        <div className="api-tutorial-control">
+        <div {...stylex.props(documentStyles.column, drawStyles.blockChild)}>
           <TutorialAuthoringConversation conversation={node.conversation} />
         </div>
       );
     case "view":
       return (
-        <div className="api-tutorial-control">
+        <div {...stylex.props(documentStyles.column, drawStyles.blockChild)}>
           <TutorialViewButton view={node.view}>{node.label}</TutorialViewButton>
         </div>
       );
@@ -266,12 +325,13 @@ export function renderBlock<K extends BlockType>(
 }
 
 interface BlockErrorBoundaryProps {
-  type: BlockType;
+  block: StoredBlock;
   onError(error: Error): void;
   children: ReactNode;
 }
 
 interface BlockErrorBoundaryState {
+  block: StoredBlock;
   error: Error | null;
 }
 
@@ -283,10 +343,23 @@ export class BlockErrorBoundary extends Component<
   BlockErrorBoundaryProps,
   BlockErrorBoundaryState
 > {
-  override state: BlockErrorBoundaryState = { error: null };
+  override state: BlockErrorBoundaryState = {
+    block: this.props.block,
+    error: null,
+  };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
+  }
+
+  static getDerivedStateFromProps(
+    props: BlockErrorBoundaryProps,
+    state: BlockErrorBoundaryState,
+  ): BlockErrorBoundaryState | null {
+    // An edit replaces the block object; the last failure was for the old one.
+    return props.block === state.block
+      ? null
+      : { block: props.block, error: null };
   }
 
   override componentDidCatch(error: Error) {
@@ -295,15 +368,55 @@ export class BlockErrorBoundary extends Component<
 
   override render() {
     const { error } = this.state;
+    const { type } = this.props.block;
 
     if (error)
       return (
-        <div role="alert" data-block-error={this.props.type}>
-          This {this.props.type.replaceAll("_", " ")} block could not be
-          rendered: {error.message}
+        <div
+          role="alert"
+          data-block-error={type}
+          {...stylex.props(drawStyles.blockChild)}
+        >
+          This {type.replaceAll("_", " ")} block could not be rendered:{" "}
+          {error.message}
         </div>
       );
 
     return this.props.children;
   }
 }
+
+const inDocument = () => stylex.when.ancestor(":is(*)", documentMarker);
+
+const styles = stylex.create({
+  callout: {
+    margin: { default: null, [inDocument()]: "18px 0" },
+    padding: { default: null, [inDocument()]: "12px 16px" },
+    borderLeftWidth: { default: null, [inDocument()]: "2px" },
+    borderLeftStyle: { default: null, [inDocument()]: "solid" },
+    borderLeftColor: { default: null, [inDocument()]: tokens.inkFaint },
+    borderRadius: {
+      default: null,
+      [inDocument()]: `0 ${radius.control} ${radius.control} 0`,
+    },
+    backgroundColor: { default: null, [inDocument()]: tokens.tray },
+    fontSize: { default: null, [inDocument()]: fontSize.reading },
+    lineHeight: { default: null, [inDocument()]: "22px" },
+  },
+  info: {
+    borderLeftColor: { default: null, [inDocument()]: tokens.accent },
+    backgroundColor: { default: null, [inDocument()]: tokens.markerTint },
+  },
+  warning: {
+    borderLeftColor: { default: null, [inDocument()]: tokens.changeModified },
+    backgroundColor: { default: null, [inDocument()]: tokens.diffModifiedBg },
+  },
+  danger: {
+    borderLeftColor: { default: null, [inDocument()]: tokens.changeRemoved },
+    backgroundColor: { default: null, [inDocument()]: tokens.diffRemovedBg },
+  },
+  success: {
+    borderLeftColor: { default: null, [inDocument()]: tokens.changeAdded },
+    backgroundColor: { default: null, [inDocument()]: tokens.diffAddedBg },
+  },
+});

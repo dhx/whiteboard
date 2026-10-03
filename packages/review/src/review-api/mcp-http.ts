@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { ReviewToolCall } from "@review/review-telemetry.js";
 
-import type { ReviewToolCall } from "../review-telemetry.js";
 import { ReviewApiClient } from "./client.js";
 import { createReviewMcpServer } from "./mcp.js";
 import { REVIEW_VIA_HEADER } from "./request-origin.js";

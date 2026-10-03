@@ -12,17 +12,18 @@ PAYLOAD="$APP_DIR/dist/darwin-payload.tar.zst"
 
 # shellcheck source=darwin-payload-manifest.sh
 source "$APP_DIR/scripts/darwin-payload-manifest.sh"
-CURATED_EXTENSIONS_PAYLOAD="$MONOREPO_ROOT/$DARWIN_PAYLOAD_CURATED_EXTENSIONS_PATH"
 
 if (( $# > 0 )); then
   echo "usage: $0" >&2
   exit 2
 fi
 
-# The compile host is Linux, but curated extensions contain target-native
-# servers. Materialize the Darwin variants that the final app will execute.
+first_target="${DARWIN_PAYLOAD_TARGETS[0]}"
+
+# build.sh always recompiles, so run it once here; the other targets are
+# materialized below without repeating the compile.
 REVIEW_DESKTOP_COMPILE_ONLY=1 \
-  REVIEW_DESKTOP_CURATED_EXTENSION_TARGET=darwin-arm64 \
+  REVIEW_DESKTOP_CURATED_EXTENSION_TARGET="$first_target" \
   bash "$APP_DIR/scripts/build.sh"
 
 if git -C "$MONOREPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
@@ -31,6 +32,8 @@ else
   BUILD_SOURCEVERSION="$(jj --repository "$MONOREPO_ROOT" --ignore-working-copy log --no-graph -r @ -T 'commit_id')"
 fi
 export BUILD_SOURCEVERSION
+# The arm64-named prepare task produces the arch-independent out-vscode-min
+# that both targets reuse.
 npm --prefix "$CHECKOUT" run gulp -- vscode-darwin-arm64-min-prepare
 
 # Tags the bundles, so it must run before they are archived.
@@ -38,10 +41,18 @@ if [[ -n "${REVIEW_POSTHOG_KEY:-}" ]]; then
   node "$APP_DIR/scripts/upload-source-maps.mjs" --out "$CHECKOUT/out-vscode-min"
 fi
 
-rm -rf -- "$CURATED_EXTENSIONS_PAYLOAD"
-node "$APP_DIR/scripts/curated-extensions.mjs" \
-  --target=darwin-arm64 \
-  --copy-to "$CURATED_EXTENSIONS_PAYLOAD"
+for target in "${DARWIN_PAYLOAD_TARGETS[@]}"; do
+  if [[ "$target" != "$first_target" ]]; then
+    # build.sh above only materialized curated extensions for the first target.
+    node "$APP_DIR/scripts/curated-extensions.mjs" "--target=$target"
+  fi
+
+  target_payload="$MONOREPO_ROOT/$DARWIN_PAYLOAD_CURATED_EXTENSIONS_ROOT/$target"
+  rm -rf -- "$target_payload"
+  node "$APP_DIR/scripts/curated-extensions.mjs" \
+    --target="$target" \
+    --copy-to "$target_payload"
+done
 
 mkdir -p "$APP_DIR/dist"
 rm -f -- "$PAYLOAD"

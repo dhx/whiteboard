@@ -1,10 +1,20 @@
 import { cursorInstallDeeplink } from "./cursor-deeplink";
 import type { InstallTarget } from "./install";
 
-/** The one launch form every Whiteboard MCP registration uses; plugins must match it byte for byte. */
+/** The macOS and Linux launch form; the Claude and Cursor plugins must match it byte for byte, and the Codex plugin's bin/whiteboard-mcp runs the same command. */
 export const REVIEW_MCP_LAUNCH = {
   command: "sh",
   args: ["-c", 'exec "$HOME/.local/bin/whiteboard" mcp'],
+} as const;
+
+/**
+ * Windows has no sh, and Node-based harnesses cannot start a .cmd file
+ * directly. cmd finds whiteboard.cmd on PATH, whether the first-run step or
+ * the installer put it there.
+ */
+export const WINDOWS_MCP_LAUNCH = {
+  command: "cmd",
+  args: ["/d", "/c", "whiteboard", "mcp"],
 } as const;
 
 export interface ConnectPromptInput {
@@ -14,6 +24,8 @@ export interface ConnectPromptInput {
   traceEnabled: boolean;
   fffBinaryPath: string;
   fffCorpusRoot: string;
+  /** Defaults to this process's platform. */
+  platform?: NodeJS.Platform;
 }
 
 export const FFF_INSTALL_URL =
@@ -23,10 +35,22 @@ export const PI_FFF_PACKAGE = "npm:@ff-labs/pi-fff";
 
 export const PI_WHITEBOARD_PACKAGE = "npm:@dev.fast/pi-whiteboard";
 
-export function reviewMcpLaunch(hasShim: boolean): {
+/** A stdio MCP server launch, as harness configs spell it. */
+export interface McpLaunch {
   command: string;
   args: string[];
-} {
+}
+
+export function reviewMcpLaunch(
+  hasShim: boolean,
+  platform: NodeJS.Platform = process.platform,
+): McpLaunch {
+  if (platform === "win32")
+    return {
+      command: WINDOWS_MCP_LAUNCH.command,
+      args: [...WINDOWS_MCP_LAUNCH.args],
+    };
+
   return hasShim
     ? {
         command: REVIEW_MCP_LAUNCH.command,
@@ -59,9 +83,23 @@ function fffSteps(input: ConnectPromptInput, target: InstallTarget): string[] {
   ];
 }
 
-function pluginSteps(target: Exclude<InstallTarget, "cursor">): string[] {
+/** The Claude plugin's sh launch cannot start on Windows, so register the server directly. */
+export const CLAUDE_WINDOWS_MCP_ADD = `claude mcp add -s user whiteboard -- ${WINDOWS_MCP_LAUNCH.command} ${WINDOWS_MCP_LAUNCH.args.join(" ")}`;
+
+/** Copilot CLI loads the Claude plugin, so on Windows it too registers the server directly. */
+export const COPILOT_WINDOWS_MCP_ADD = `copilot mcp add whiteboard -- ${WINDOWS_MCP_LAUNCH.command} ${WINDOWS_MCP_LAUNCH.args.join(" ")}`;
+
+function pluginSteps(
+  target: Exclude<InstallTarget, "cursor">,
+  platform: NodeJS.Platform,
+): string[] {
   switch (target) {
     case "claude":
+      if (platform === "win32")
+        return [
+          `Run:\n\n\`\`\`sh\nclaude plugin uninstall whiteboard@devfast # its launch cannot start on Windows, if installed\nclaude mcp remove -s user whiteboard # old registration, if any\n${CLAUDE_WINDOWS_MCP_ADD}\n\`\`\``,
+        ];
+
       return [
         "Run:\n\n```sh\nclaude plugin marketplace add devdotfast/whiteboard\nclaude plugin install whiteboard@devfast --scope user\nclaude mcp remove -s user whiteboard # old manual registration, if any\n```",
       ];
@@ -69,16 +107,58 @@ function pluginSteps(target: Exclude<InstallTarget, "cursor">): string[] {
       return [
         "Run:\n\n```sh\ncodex plugin marketplace add devdotfast/whiteboard\ncodex plugin add whiteboard@devfast\ncodex mcp remove whiteboard # old manual registration, if any\n```",
       ];
-    case "opencode":
+    case "opencode": {
+      const launch = reviewMcpLaunch(true, platform);
+
+      const entry = JSON.stringify(
+        {
+          whiteboard: {
+            type: "local",
+            command: [launch.command, ...launch.args],
+          },
+        },
+        null,
+        2,
+      );
+
       return [
-        "Run:\n\n```sh\nopencode plugin @dev.fast/opencode-whiteboard --global\n```",
+        `On OpenCode 2.0 or later, run:\n\n\`\`\`sh\nopencode mcp add --global whiteboard -- ${launchCommand(launch)}\n\`\`\`\n\nOn older OpenCode, add this entry to "mcp" in ~/.config/opencode/opencode.json, keeping the rest of the file:\n\n\`\`\`json\n${entry}\n\`\`\``,
+        `Remove "@dev.fast/opencode-whiteboard" from "plugin" in ~/.config/opencode/opencode.json if it is there.`,
+      ];
+    }
+
+    case "copilot":
+      if (platform === "win32")
+        return [
+          `Run:\n\n\`\`\`sh\ncopilot plugin uninstall whiteboard@devfast # its launch cannot start on Windows, if installed\ncopilot mcp remove whiteboard # old registration, if any\n${COPILOT_WINDOWS_MCP_ADD}\n\`\`\``,
+        ];
+
+      return [
+        "Run:\n\n```sh\ncopilot plugin marketplace add devdotfast/whiteboard\ncopilot plugin install whiteboard@devfast\ncopilot mcp remove whiteboard # old manual registration, if any\n```",
       ];
     case "pi":
-    case "omp":
       return [
-        `Run:\n\n\`\`\`sh\n${target} install ${PI_WHITEBOARD_PACKAGE}\n\`\`\``,
+        `On Pi 0.99.0 or later, run:\n\n\`\`\`sh\npi mcp add whiteboard -- ${launchCommand(reviewMcpLaunch(true, platform))}\npi remove ${PI_WHITEBOARD_PACKAGE} # if installed\n\`\`\`\n\nOn older Pi, run \`pi install ${PI_WHITEBOARD_PACKAGE}\`.`,
       ];
+    case "omp": {
+      const entry = JSON.stringify(
+        { whiteboard: reviewMcpLaunch(true, platform) },
+        null,
+        2,
+      );
+
+      return [
+        `Add this entry to mcpServers in ~/.omp/agent/mcp.json, keeping the rest of the file:\n\n\`\`\`json\n${entry}\n\`\`\``,
+        `Run \`omp plugin uninstall @dev.fast/pi-whiteboard\` if installed.`,
+      ];
+    }
   }
+}
+
+export function launchCommand(launch: McpLaunch): string {
+  return [launch.command, ...launch.args]
+    .map((arg) => (/^[\w./-]+$/.test(arg) ? arg : shellQuote(arg)))
+    .join(" ");
 }
 
 function cursorSteps(): string[] {
@@ -109,11 +189,13 @@ export function connectPrompt(
       : [];
 
   const verify =
-    target === "pi" || target === "omp"
-      ? `Ask me to run ${target === "pi" ? "/reload in Pi" : "/reload-plugins in oh-my-pi"}, then run \`whiteboard api session_get_instructions '{}'\` and confirm it answered. Do not author anything yet.`
-      : target === "opencode"
-        ? "Stop and tell me to quit and reopen OpenCode: it loads plugins and MCP servers only at startup. After I reopen it, call `session_get_instructions` on the Whiteboard server to confirm the connection. Do not author anything yet."
-        : "Reload your MCP tools and call `session_get_instructions` on the Whiteboard server. If a restart is needed, tell me and verify after it. Do not author anything yet.";
+    target === "pi"
+      ? "Ask me to run /reload, then call `session_get_instructions` on the Whiteboard server (older Pi: `whiteboard api session_get_instructions '{}'`). Do not author anything yet."
+      : target === "omp"
+        ? "Ask me to run /mcp reload, then call `session_get_instructions` on the Whiteboard server. Do not author anything yet."
+        : target === "opencode"
+          ? "Stop and tell me to quit and reopen OpenCode: it loads MCP servers only at startup. After I reopen it, call `session_get_instructions` on the Whiteboard server to confirm the connection. Do not author anything yet."
+          : "Reload your MCP tools and call `session_get_instructions` on the Whiteboard server. If a restart is needed, tell me and verify after it. Do not author anything yet.";
 
   return [
     "Connect this agent to dev.fast Whiteboard.",
@@ -126,7 +208,10 @@ export function connectPrompt(
         : []),
       ...(target === "cursor"
         ? cursorSteps()
-        : [...pluginSteps(target), ...extra]),
+        : [
+            ...pluginSteps(target, input.platform ?? process.platform),
+            ...extra,
+          ]),
       verify,
     ]),
   ].join("\n");
@@ -144,6 +229,7 @@ export function connectSetupPrompts(): Record<InstallTarget, string> {
     opencode: connectSetupPrompt("opencode"),
     pi: connectSetupPrompt("pi"),
     omp: connectSetupPrompt("omp"),
+    copilot: connectSetupPrompt("copilot"),
   };
 }
 
@@ -157,5 +243,6 @@ export function connectPrompts(
     opencode: connectPrompt("opencode", input),
     pi: connectPrompt("pi", input),
     omp: connectPrompt("omp", input),
+    copilot: connectPrompt("copilot", input),
   };
 }

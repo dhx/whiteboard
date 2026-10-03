@@ -1,16 +1,16 @@
 import type { Readable, Writable } from "node:stream";
 
 import { traceMachineEnabled } from "@dev.fast/trace-core";
-
 import {
   REVIEW_INSTANCE_ENV,
   selectReviewInstance,
-} from "../desktop-discovery.js";
-import { devReviewHome } from "../review-home-paths.js";
+} from "@review/desktop-discovery.js";
+import { devReviewHome } from "@review/review-home-paths.js";
 import {
   type ReviewToolCall,
   reviewSessionAgent,
-} from "../review-telemetry.js";
+} from "@review/review-telemetry.js";
+
 import {
   type AuthoringTool,
   connectReviewApi,
@@ -130,7 +130,7 @@ export async function runReviewAgentCli(input: AgentCliInput): Promise<number> {
 
     if (!tool)
       throw new Error(
-        `Unknown Review tool: ${name}. Use whiteboard api tools.`,
+        `Unknown review tool: ${name}. Use whiteboard api tools.`,
       );
     let source = json ?? "{}";
 

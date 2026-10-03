@@ -1,10 +1,7 @@
 import { jsonBoolean, jsonNumber, jsonString } from "@dev.fast/review-protocol";
+import { UI_TELEMETRY_EVENTS } from "@review/ui-telemetry-events";
+import type { UiTelemetryEventName } from "@review/ui-telemetry-events";
 
-import {
-  REVIEW_APP_SESSION_ID_HEADER,
-  UI_TELEMETRY_EVENTS,
-} from "../../src/ui-telemetry-events";
-import type { UiTelemetryEventName } from "../../src/ui-telemetry-events";
 import type { ReviewSession } from "./host/review-session";
 
 type UiTelemetryPropertyValue = string | number | boolean;
@@ -12,10 +9,6 @@ type UiTelemetryPropertyValue = string | number | boolean;
 type UiTelemetryProperties = Record<string, UiTelemetryPropertyValue>;
 
 let appOpenedSent = false;
-
-export function reviewAppTelemetryHeaders(session: ReviewSession) {
-  return { [REVIEW_APP_SESSION_ID_HEADER]: session.appSessionId };
-}
 
 export function captureAppOpened(session: ReviewSession): void {
   if (appOpenedSent) return;

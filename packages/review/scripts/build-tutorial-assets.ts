@@ -15,11 +15,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import { parseJsonText } from "@dev.fast/review-protocol";
+import { sourceReferences } from "@review/review-api/document";
+import { openLocalReviewStore } from "@review/review-api/local-data";
+import { createNativeTutorial } from "@review/server/tutorial-service";
 import { z } from "zod";
-
-import { sourceReferences } from "../src/review-api/document";
-import { openLocalReviewStore } from "../src/review-api/local-data";
-import { createNativeTutorial } from "../src/server/tutorial-service";
 
 const execFilePromise = promisify(execFile);
 
@@ -118,11 +117,16 @@ export async function buildTutorialAssets(
     await git(repo, ["init", "--initial-branch=main"]);
     await git(repo, ["config", "user.name", "Review Tutorial"]);
     await git(repo, ["config", "user.email", "tutorial@review.local"]);
+    await git(repo, ["config", "core.autocrlf", "input"]);
     const headSources = new Map<string, string>();
 
     for (const rewrite of BASE_SOURCE_REWRITES) {
       const sourcePath = path.join(repo, rewrite.path);
-      const headSource = await readFile(sourcePath, "utf8");
+
+      const headSource = (await readFile(sourcePath, "utf8")).replace(
+        /\r\n?/gu,
+        "\n",
+      );
 
       if (!headSource.includes(rewrite.head)) {
         throw new Error(`Tutorial base rewrite is stale for ${rewrite.path}.`);

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import {
@@ -22,6 +23,7 @@ export function stampReleaseChannel({
   quality = "stable",
   packagePath = path.join(APP_DIR, "package.json"),
   productPath = path.join(APP_DIR, "code-oss", "product.json"),
+  cliPackagePath = path.resolve(APP_DIR, "../../packages/review/package.json"),
 }) {
   if (!version) {
     throw new Error("version is required");
@@ -31,6 +33,9 @@ export function stampReleaseChannel({
 
   const pkg = JSON.parse(readFileSync(packagePath, "utf8"));
   pkg.version = version;
+
+  const cliPkg = JSON.parse(readFileSync(cliPackagePath, "utf8"));
+  cliPkg.version = version;
 
   const product = readFileSync(productPath, "utf8");
 
@@ -53,6 +58,7 @@ export function stampReleaseChannel({
   }
 
   writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
+  writeFileSync(cliPackagePath, `${JSON.stringify(cliPkg, null, 2)}\n`);
   writeFileSync(productPath, stampedProduct);
 }
 
@@ -77,6 +83,6 @@ function main() {
   });
 }
 
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main();
 }

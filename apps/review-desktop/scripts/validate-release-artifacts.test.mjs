@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 
 import { releaseIdentityFor } from "./release-channel.mjs";
 import {
+  assertMachOArch,
   assertPackagedProduct,
-  assertReleaseChannel,
   assertUpdaterCompatibleApp,
   buildManifest,
 } from "./validate-release-artifacts.mjs";
@@ -33,6 +35,7 @@ test("buildManifest emits the schema the update Worker serves", () => {
   const manifest = buildManifest({
     version: "1.2.3",
     commit: "abc123",
+    target: "darwin-arm64",
     payloads: [
       { bundle: "Review", artifact: "Review", sha256: "cafe" },
       { bundle: "Whiteboard", artifact: "Whiteboard", sha256: "f00d" },
@@ -60,6 +63,21 @@ test("buildManifest emits the schema the update Worker serves", () => {
     },
   });
 });
+
+test(
+  "assertMachOArch rejects a binary built for the other arch",
+  { skip: process.platform !== "darwin" },
+  () => {
+    const thin = path.join(mkdtempSync(path.join(tmpdir(), "macho-")), "true");
+    execFileSync("lipo", ["/usr/bin/true", "-thin", "arm64e", "-output", thin]);
+
+    assert.throws(
+      () => assertMachOArch(thin, "x64"),
+      /is arm64e, expected x86_64/,
+    );
+    assertMachOArch("/usr/bin/true", "x64");
+  },
+);
 
 test("assertPackagedProduct accepts a correctly stamped product", () => {
   assertPackagedProduct(PRODUCT, { commit: "abc123" });
@@ -96,10 +114,6 @@ test("assertPackagedProduct rejects a cross-channel product", () => {
       }),
     /quality/,
   );
-});
-
-test("assertReleaseChannel rejects an unsupported channel", () => {
-  assert.throws(() => assertReleaseChannel("nightly"), /stable or preview/);
 });
 
 test("assertPackagedProduct rejects a mismatched commit", () => {

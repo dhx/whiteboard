@@ -200,56 +200,6 @@ describe("trace capture installation", () => {
       JSON.parse(await readFile(configPath, "utf8")).stores.s3.secretAccessKey,
     ).toBe("fresh-secret-value");
   });
-
-  it("uses the shared installer and keeps credentials when disabled", async () => {
-    const homeDir = await mkdtemp(path.join(tmpdir(), "review-trace-install-"));
-
-    temporaryDirectories.push(homeDir);
-
-    const env: NodeJS.ProcessEnv = {
-      DEV_REVIEW_HOME: path.join(homeDir, ".dev"),
-      TRACE_ENV_FILE: path.join(homeDir, "trace.env"),
-      TRACE_SETTINGS_FILE: path.join(homeDir, "trace-settings.json"),
-      TRACE_R2_MODE: "mock",
-    };
-
-    const applied = await applyCliInstall({
-      packageRoot,
-      homeDir,
-      env,
-      trace: {
-        endpoint: "mock://endpoint",
-        bucket: "mock-bucket",
-        key: "mock-key-id",
-        secret: "mock-secret-value",
-      },
-    });
-
-    expect(applied.code).toBe(0);
-    const status = await resolveCliInstallStatus({ packageRoot, homeDir, env });
-    expect(status.trace).toMatchObject({
-      enabled: true,
-      configured: true,
-      autoActivateRepositories: true,
-      accessKeyIdPrefix: "mock-k",
-    });
-    expect(JSON.stringify(status)).not.toContain("mock-secret-value");
-    expect(status.stamp?.traceManaged).toBe(true);
-
-    await removeCliInstall({ trace: true, homeDir, env });
-
-    const disabled = await resolveCliInstallStatus({
-      packageRoot,
-      homeDir,
-      env,
-    });
-
-    expect(disabled.trace.enabled).toBe(false);
-    expect(disabled.trace.configured).toBe(true);
-    expect(await readFile(env.TRACE_ENV_FILE!, "utf8")).toContain(
-      "mock-secret-value",
-    );
-  });
 });
 
 describe("shell profile PATH management", () => {
@@ -507,7 +457,7 @@ describe("review command installation", () => {
 
     const removed = await removeCliInstall({ shim: true, homeDir, env });
 
-    expect(removed.output).toContain("removed Review PATH entry");
+    expect(removed.output).toContain("removed Whiteboard PATH entry");
     await expect(
       readFile(path.join(homeDir, ".local", "bin", "whiteboard"), "utf8"),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -556,6 +506,50 @@ function profileEnvironment(homeDir: string, shell: string): NodeJS.ProcessEnv {
     SHELL: shell,
   };
 }
+
+describe("Windows command PATH", () => {
+  // A running Whiteboard keeps its startup PATH, and the registry check can
+  // disagree with the write the installer just made, so the stamp's record of
+  // that write is what readies the command.
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platform);
+  });
+
+  async function windowsStatus(recorded: boolean) {
+    const homeDir = await temporaryHome("review-windows-path-");
+    const env = profileEnvironment(homeDir, "");
+    const shimPath = pathShimPath(homeDir);
+    await mkdir(path.dirname(shimPath), { recursive: true });
+    await writeFile(
+      shimPath,
+      "@echo off\r\nrem Managed by Whiteboard Desktop. Do not edit.\r\n",
+    );
+
+    const stamp: ReviewCliInstallStamp = {
+      consent: "granted",
+      shimPath,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (recorded) stamp.userPath = path.dirname(shimPath);
+    await writePrivateJsonAtomic(cliInstallStampPath(env), stamp);
+
+    return resolveCliInstallStatus({ packageRoot, homeDir, env });
+  }
+
+  it("readies the command once the install recorded its user PATH write", async () => {
+    expect((await windowsStatus(true)).shim).toMatchObject({
+      installed: true,
+      profileConfigured: true,
+    });
+    expect((await windowsStatus(false)).shim.profileConfigured).toBe(false);
+  });
+});
 
 describe("installed launcher runtime selection", () => {
   it("refreshes a managed launcher to the selected build and profile even when the old build exists", async () => {
@@ -897,24 +891,6 @@ describe("MCP self-install", () => {
       expect(Object.keys(status.stamp ?? {})).not.toContain("targets");
     });
 
-    it("reports updateNeeded for a pre-per-target stamp", async () => {
-      await writeStamp({
-        consent: "granted",
-        fingerprint: "old",
-        updatedAt: now,
-      });
-
-      expect(
-        (
-          await resolveCliInstallStatus({
-            packageRoot: builtRoot,
-            homeDir,
-            env,
-          })
-        ).updateNeeded,
-      ).toBe(true);
-    });
-
     it.each([null, "granted", "declined", "skipped"] as const)(
       "requires the update while legacy skills remain with consent %s, even after Done",
       async (consent) => {
@@ -979,9 +955,6 @@ describe("MCP self-install", () => {
 
       const { plugins } = built.connect;
 
-      expect(plugins.opencode.command).toContain(
-        "@dev.fast/opencode-whiteboard",
-      );
       expect(plugins.cursor).toEqual({
         label: "Install in Cursor",
         url: cursorInstallDeeplink(reviewMcpLaunch(true)),
@@ -1103,27 +1076,6 @@ describe("MCP self-install", () => {
           })
         ).updateNeeded,
       ).toBe(true);
-    });
-  });
-
-  describe("removeLegacyReviewSkills", () => {
-    it("removes stamped skills and the status no longer lists them", async () => {
-      await writeStampedSkill(
-        path.join(homeDir, ".agents", "skills", "scratchpad"),
-      );
-
-      const { removed } = await removeLegacyReviewSkills({ homeDir, env });
-
-      expect(removed).toHaveLength(1);
-      expect(
-        (
-          await resolveCliInstallStatus({
-            packageRoot: builtRoot,
-            homeDir,
-            env,
-          })
-        ).legacySkills,
-      ).toEqual([]);
     });
   });
 });

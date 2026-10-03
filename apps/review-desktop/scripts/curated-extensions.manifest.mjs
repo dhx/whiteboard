@@ -24,6 +24,9 @@
  * `executables` are paths (relative to the unpacked extension root) that must
  * exist and stay executable. They are asserted at materialize time so a payload
  * layout change fails the build instead of silently shipping a broken server.
+ *
+ * `prunePaths` are removed from the unpacked extension because Review never
+ * runs them.
  */
 export const curatedExtensions = Object.freeze([
   {
@@ -61,6 +64,23 @@ export const curatedExtensions = Object.freeze([
     stripExtensionPack: false,
   },
   {
+    id: "ms-vscode.sublime-keybindings",
+    tier: "bundled",
+    namespace: "ms-vscode",
+    name: "sublime-keybindings",
+    version: "4.1.10",
+    group: "sublime",
+    label: "Sublime Text keybindings",
+    targets: {
+      universal: {
+        sha256:
+          "fe064eb9f0b83466ede5ed1c7b1a8289b11af8abba82005f7187d571fdb26a34",
+      },
+    },
+    executables: [],
+    stripExtensionPack: false,
+  },
+  {
     id: "rust-lang.rust-analyzer",
     tier: "optional",
     role: "primary",
@@ -70,11 +90,23 @@ export const curatedExtensions = Object.freeze([
     group: "rust",
     label: "Rust (rust-analyzer)",
     targets: {
+      "win32-x64": {
+        url: "https://open-vsx.org/api/rust-lang/rust-analyzer/win32-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@win32-x64.vsix",
+        sha256:
+          "09e9023bf4e7c1d7b333b2a2457742c482b897b776d12528e38853230e5bcb38",
+        size: 19125573,
+      },
       "darwin-arm64": {
         url: "https://open-vsx.org/api/rust-lang/rust-analyzer/darwin-arm64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@darwin-arm64.vsix",
         sha256:
           "e068ebb88f705491856b91cdbf8b7ead40c22d50f2c24df70e345c889c2b0111",
         size: 15445156,
+      },
+      "darwin-x64": {
+        url: "https://open-vsx.org/api/rust-lang/rust-analyzer/darwin-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@darwin-x64.vsix",
+        sha256:
+          "00e0f18acff0ba954810d2234af3c2e3fd9703f8d44c6bc2ae705127fa2f6a65",
+        size: 15926469,
       },
       "linux-x64": {
         url: "https://open-vsx.org/api/rust-lang/rust-analyzer/linux-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@linux-x64.vsix",
@@ -85,14 +117,6 @@ export const curatedExtensions = Object.freeze([
     },
     executables: ["server/rust-analyzer"],
     stripExtensionPack: false,
-    // rust-analyzer ships only `workspaceContains:` activation events. Review
-    // now roots the workspace at the reviewed repository, so those can fire,
-    // but two gaps remain: the extension host only re-evaluates
-    // `workspaceContains:` for folders added while it is already running, and
-    // the patterns miss a Rust file whose Cargo.toml is not at the folder
-    // root. Every other curated language extension already declares an
-    // `onLanguage:` event; this gives rust-analyzer the same trigger.
-    addActivationEvents: ["onLanguage:rust"],
   },
   {
     id: "swiftlang.swift-vscode",
@@ -144,11 +168,23 @@ export const curatedExtensions = Object.freeze([
     group: "csharp",
     label: "C#",
     targets: {
+      "win32-x64": {
+        url: "https://open-vsx.org/api/muhammad-sammy/csharp/win32-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@win32-x64.vsix",
+        sha256:
+          "29c22be7c5d15e8b395a403a18953e6f069bb8d9f5e886ee81eba7ee4e1a0e6b",
+        size: 78285827,
+      },
       "darwin-arm64": {
         url: "https://open-vsx.org/api/muhammad-sammy/csharp/darwin-arm64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@darwin-arm64.vsix",
         sha256:
           "93f61e8b6938cbe8ecda8768bfaf08abed9789db9461177d3d0ab59ccda2528d",
         size: 75096042,
+      },
+      "darwin-x64": {
+        url: "https://open-vsx.org/api/muhammad-sammy/csharp/darwin-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@darwin-x64.vsix",
+        sha256:
+          "8164ff9ad9ceb849d13ee8c768c97861f0028f48f538ce9658731350e4b88b2d",
+        size: 78021251,
       },
       "linux-x64": {
         url: "https://open-vsx.org/api/muhammad-sammy/csharp/linux-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@linux-x64.vsix",
@@ -200,6 +236,9 @@ export const curatedExtensions = Object.freeze([
     // Its extension pack points at Pylance (proprietary, not redistributable)
     // and debugpy, none of which Review ships.
     stripExtensionPack: true,
+    // The bundled Jedi language server; Review defaults
+    // `python.languageServer` to "None" and ty serves Python instead.
+    prunePaths: ["python_files/lib/jedilsp"],
   },
   {
     id: "astral-sh.ty",
@@ -210,9 +249,19 @@ export const curatedExtensions = Object.freeze([
     group: "python",
     label: "Python type checking (ty)",
     targets: {
+      "win32-x64": {
+        url: "https://open-vsx.org/api/astral-sh/ty/win32-x64/2026.64.0/file/astral-sh.ty-2026.64.0@win32-x64.vsix",
+        sha256:
+          "b88ffd1b25c87fe209745ecf68a1871ad31e1eb970441b1d016cba64429b112d",
+        size: 12920723,
+      },
       "darwin-arm64": {
         sha256:
           "3ac92b3f4b7ac848ea9a125a787a0b181879835d54b2e136e760161df414b08a",
+      },
+      "darwin-x64": {
+        sha256:
+          "27d57df17fc3670b8c818b246f08cbb150ceaa2005273a06b23bc4b6241e66c1",
       },
       "linux-x64": {
         sha256:
@@ -231,9 +280,19 @@ export const curatedExtensions = Object.freeze([
     group: "python",
     label: "Python lint/format (ruff)",
     targets: {
+      "win32-x64": {
+        url: "https://open-vsx.org/api/charliermarsh/ruff/win32-x64/2026.66.0/file/charliermarsh.ruff-2026.66.0@win32-x64.vsix",
+        sha256:
+          "23474f4e92ead0e18e8034275d2dff743f2aaaff6c4e87254b156bbedac7fb46",
+        size: 12802660,
+      },
       "darwin-arm64": {
         sha256:
           "652cf695fbe11c4bcae85432b3baf70f8bc2520dc13bbc5dd95b3600c8b1f227",
+      },
+      "darwin-x64": {
+        sha256:
+          "9c780cad1d6a6f26593ecde22190cb04e4345ac512ca86104b697c04a6b005c1",
       },
       "linux-x64": {
         sha256:
@@ -272,7 +331,12 @@ export const curatedExtensions = Object.freeze([
 ]);
 
 /** Build targets Review knows how to materialize platform-specific VSIXes for. */
-export const supportedTargets = Object.freeze(["darwin-arm64", "linux-x64"]);
+export const supportedTargets = Object.freeze([
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-x64",
+  "win32-x64",
+]);
 
 /** Group tokens accepted by DEV_REVIEW_EXTENSIONS, in display order. */
 export const curatedGroups = Object.freeze([
@@ -283,6 +347,7 @@ export const curatedGroups = Object.freeze([
   "go",
   "vim",
   "emacs",
+  "sublime",
 ]);
 
 /** Extensions that release builds materialize and package. */
@@ -302,24 +367,8 @@ export const bundledGroups = Object.freeze(
   ),
 );
 
-/** Group tokens that require an explicit development selection. */
-export const optionalGroups = Object.freeze(
-  curatedGroups.filter((group) =>
-    optionalExtensions.some((extension) => extension.group === group),
-  ),
-);
-
-/** Groups represented by a primary or bundled extension in the management UI. */
-export const userFacingGroups = Object.freeze(
-  curatedGroups.filter((group) =>
-    curatedExtensions.some(
-      (extension) => extension.group === group && extension.role !== "support",
-    ),
-  ),
-);
-
 /** Keymaps conflict with each other, so at most one may be enabled at a time. */
-export const keymapGroups = Object.freeze(["vim", "emacs"]);
+export const keymapGroups = Object.freeze(["vim", "emacs", "sublime"]);
 
 /** Extensions that start out disabled on a fresh profile. */
 export const defaultDisabledIds = Object.freeze(

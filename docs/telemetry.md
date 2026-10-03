@@ -309,7 +309,7 @@ The server checks all properties in this table against
 | `review_bug_report_dialog_opened` | None                                                                                                                                                                           | A user opens the bug report dialog                                                                         |
 | `review_bug_report_cancelled`     | None                                                                                                                                                                           | A user closes the dialog without a report                                                                  |
 | `review_bug_report_send_failed`   | Short `error_name`                                                                                                                                                             | A bug report request fails                                                                                 |
-| `review_setting_changed`          | `setting` in telemetry_enabled, keymap, software_map_enabled, scratchpad_enabled, diffr_config, structural_diff, theme; `enabled`; `value` in dark, light, system (theme only) | A user changes a Whiteboard setting                                                                        |
+| `review_setting_changed`          | `setting` in telemetry_enabled, keymap, software_map_enabled, scratchpad_enabled, diffr_config, structural_diff, theme, ctrl_tab, ready_notification, document_width; `enabled`; `value` in dark, light, system (theme only) | A user changes a Whiteboard setting                                                                        |
 | `review_review_opened`            | `via` in home, other                                                                                                                                                           | A user opens a whiteboard                                                                                  |
 | `review_diff_layout_changed`      | `layout` in split, unified                                                                                                                                                     | A user switches the diff layout                                                                            |
 | `review_home_empty_state_viewed`  | None                                                                                                                                                                           | The empty Home state opens                                                                                 |
@@ -320,11 +320,6 @@ The canvas sends `review_review_dismissed`, `review_review_restored`, and
 set to `review_topbar`. `review_review_restored`'s `open` (the implicit undo,
 where opening a dismissed whiteboard brings it back) is allowlisted but not yet
 sent.
-
-### Reserved events
-
-The allowlist also defines `review_review_reaped`, but no current code sends
-it. If a future change sends it, it will update this page in the same change.
 
 ### Hangs
 
@@ -352,7 +347,8 @@ session with `outcome: "app_quit"`, the same as quitting.
 The `language` property is one of typescript, javascript, python, go, rust,
 swift, csharp, json, css, html, markdown, yaml, toml, shell, sql, or other.
 The allowlisted extension identifiers are `vscodevim.vim`,
-`tuttieee.emacs-mcx`, `ms-python.python`, `astral-sh.ty`,
+`tuttieee.emacs-mcx`, `ms-vscode.sublime-keybindings`, `ms-python.python`,
+`astral-sh.ty`,
 `charliermarsh.ruff`, `golang.go`, `rust-lang.rust-analyzer`,
 `swiftlang.swift-vscode`, `llvm-vs-code-extensions.lldb-dap`,
 `muhammad-sammy.csharp`, and `ms-dotnettools.vscode-dotnet-runtime`.
@@ -453,9 +449,6 @@ independent controls choose what else is attached:
 - **Session**: the current whiteboard record and its software maps. On by
   default.
 - **Changed-file diffs used by CodePeeks**. On by default.
-
-**Agent session trace attachment is not available yet.** The dialog has no
-trace control, and reports never include agent traces.
 
 Whiteboard also captures a screenshot before the dialog opens and attaches it
 by default. The dialog shows a removable preview and accepts a replacement

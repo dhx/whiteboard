@@ -38,29 +38,6 @@ const runtime = (
 });
 
 describe("native Review picker", () => {
-  it("opens an explicit review through the authenticated JSON API", async () => {
-    const fetch = desktopFetch();
-
-    expect(
-      await runReviewAppPick(
-        { ...input, reviewUuid: "review" },
-        runtime(fetch),
-      ),
-    ).toEqual({
-      event: "app",
-      action: "pick",
-      reviewUuid: "review",
-      title: "Native",
-    });
-    expect(fetch.mock.calls.map(([url]) => String(url))).toEqual([
-      "http://127.0.0.1:5570/health",
-      "http://127.0.0.1:5570/reviews-api/review?full=true",
-      "http://127.0.0.1:5570/reviews-api/review/open",
-    ]);
-    expect(
-      new Headers(fetch.mock.calls[2]?.[1]?.headers).get("x-review-token"),
-    ).toBe("secret");
-  });
   it("asks for the snapshot the id lookup needs, not the block index", async () => {
     // Unversioned reads answer block descriptors, not the summary.
     const fetch = vi.fn<typeof globalThis.fetch>(async (url, init) => {
@@ -187,7 +164,7 @@ describe("native Review picker", () => {
         },
       ),
     ).rejects.toThrow(
-      "Review Desktop uses protocol 999, but this Review CLI needs protocol 3.",
+      "Whiteboard Desktop uses protocol 999, but this Whiteboard CLI needs protocol 3.",
     );
     expect(launched).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();

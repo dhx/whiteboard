@@ -13,10 +13,20 @@ export const reviewOptionalExtensionCatalog = [
 		group: 'rust',
 		version: '0.4.2990',
 		targets: {
+			'win32-x64': {
+				url: 'https://open-vsx.org/api/rust-lang/rust-analyzer/win32-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@win32-x64.vsix',
+				sha256: '09e9023bf4e7c1d7b333b2a2457742c482b897b776d12528e38853230e5bcb38',
+				size: 19125573
+			},
 			'darwin-arm64': {
 				url: 'https://open-vsx.org/api/rust-lang/rust-analyzer/darwin-arm64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@darwin-arm64.vsix',
 				sha256: 'e068ebb88f705491856b91cdbf8b7ead40c22d50f2c24df70e345c889c2b0111',
 				size: 15445156
+			},
+			'darwin-x64': {
+				url: 'https://open-vsx.org/api/rust-lang/rust-analyzer/darwin-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@darwin-x64.vsix',
+				sha256: '00e0f18acff0ba954810d2234af3c2e3fd9703f8d44c6bc2ae705127fa2f6a65',
+				size: 15926469
 			},
 			'linux-x64': {
 				url: 'https://open-vsx.org/api/rust-lang/rust-analyzer/linux-x64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@linux-x64.vsix',
@@ -57,10 +67,20 @@ export const reviewOptionalExtensionCatalog = [
 		group: 'csharp',
 		version: '2.145.21-g154a82fd27',
 		targets: {
+			'win32-x64': {
+				url: 'https://open-vsx.org/api/muhammad-sammy/csharp/win32-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@win32-x64.vsix',
+				sha256: '29c22be7c5d15e8b395a403a18953e6f069bb8d9f5e886ee81eba7ee4e1a0e6b',
+				size: 78285827
+			},
 			'darwin-arm64': {
 				url: 'https://open-vsx.org/api/muhammad-sammy/csharp/darwin-arm64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@darwin-arm64.vsix',
 				sha256: '93f61e8b6938cbe8ecda8768bfaf08abed9789db9461177d3d0ab59ccda2528d',
 				size: 75096042
+			},
+			'darwin-x64': {
+				url: 'https://open-vsx.org/api/muhammad-sammy/csharp/darwin-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@darwin-x64.vsix',
+				sha256: '8164ff9ad9ceb849d13ee8c768c97861f0028f48f538ce9658731350e4b88b2d',
+				size: 78021251
 			},
 			'linux-x64': {
 				url: 'https://open-vsx.org/api/muhammad-sammy/csharp/linux-x64/2.145.21-g154a82fd27/file/muhammad-sammy.csharp-2.145.21-g154a82fd27@linux-x64.vsix',

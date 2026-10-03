@@ -1,13 +1,31 @@
 #!/usr/bin/env bash
-# Validate a sealed Fedora publication in clean, pinned Fedora containers.
+# Validate a sealed Linux publication in clean, pinned Fedora and Ubuntu containers.
 set -euo pipefail
-PUBLICATION="$(cd "${1:?usage: verify-repository.sh publication-directory [43|44|all]}" && pwd -P)"
+PUBLICATION="$(cd "${1:?usage: verify-repository.sh publication-directory [43|44|ubuntu|arch|all]}" && pwd -P)"
 TARGET="${2:-all}"
-case "$TARGET" in all|43|44) ;; *) echo "Unknown Fedora test target: $TARGET" >&2; exit 2 ;; esac
+case "$TARGET" in all|43|44|ubuntu|arch) ;; *) echo "Unknown Linux test target: $TARGET" >&2; exit 2 ;; esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "$TARGET" == all ]]; then
+  pids=()
+  targets=(43 44 ubuntu arch)
+  for target in "${targets[@]}"; do
+    bash "$SCRIPT_DIR/verify-repository.sh" "$PUBLICATION" "$target" &
+    pids+=("$!")
+  done
+  result=0
+  for i in "${!pids[@]}"; do
+    if ! wait "${pids[$i]}"; then
+      echo "Linux validation failed: ${targets[$i]}" >&2
+      result=1
+    fi
+  done
+  exit "$result"
+fi
+
+ARCH_IMAGE='archlinux:base-devel@sha256:8745817f349ed24373341ddb92776209eeec3f0364ea48f7f645ac5800d30a50'
 # A publication carries exactly one channel: stable under repos/, preview under repos/preview/.
-if [[ -f "$PUBLICATION/repos/preview/current.json" ]]; then PREFIX=repos/preview; PACKAGE=dev-fast-review-preview; APP=review-preview
-else PREFIX=repos; PACKAGE=dev-fast-review; APP=review; fi
+if [[ -f "$PUBLICATION/repos/preview/current.json" ]]; then PREFIX=repos/preview; PACKAGE=whiteboard-preview; APP=whiteboard-preview
+else PREFIX=repos; PACKAGE=whiteboard; APP=whiteboard; fi
 GENERATION="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p["format"] == "rpm"; print(p["generation"])' "$PUBLICATION/$PREFIX/current.json")"
 FINGERPRINT="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["keyFingerprint"])' "$PUBLICATION/$PREFIX/current.json")"
 for VERSION in 43 44; do
@@ -16,7 +34,7 @@ for VERSION in 43 44; do
     43) IMAGE='fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42' ;;
     44) IMAGE='fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80' ;;
   esac
-  # Each fresh container would otherwise report `review --help` as an install.
+  # Each fresh container would otherwise report `whiteboard --help` as an install.
   docker run --rm --platform linux/amd64 \
     -v "$PUBLICATION:/publication:ro" -v "$SCRIPT_DIR:/test:ro" \
     -e GENERATION="$GENERATION" -e FINGERPRINT="$FINGERPRINT" \
@@ -25,3 +43,28 @@ for VERSION in 43 44; do
     "$IMAGE" bash /test/verify-fedora-container.sh
   echo "Fedora $VERSION ($PACKAGE): install, upgrade, retention, package/metadata tamper and untrusted-key rejection passed"
 done
+
+if [[ "$TARGET" == all || "$TARGET" == ubuntu ]]; then
+  CHANNEL=stable
+  if [[ "$APP" == whiteboard-preview ]]; then CHANNEL=preview; fi
+  # Docker's default seccomp policy blocks namespace creation by Chromium.
+  # The app still runs as a normal user with its own sandbox enabled.
+  docker run --rm --platform linux/amd64 --shm-size=1g --security-opt seccomp=unconfined \
+    -v "$PUBLICATION:/publication:ro" -v "$SCRIPT_DIR:/test:ro" \
+    -e GENERATION="$GENERATION" -e FINGERPRINT="$FINGERPRINT" \
+    -e PREFIX="$PREFIX" -e PACKAGE="$PACKAGE" -e APP="$APP" -e CHANNEL="$CHANNEL" \
+    -e DO_NOT_TRACK=1 \
+    ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 \
+    bash /test/verify-ubuntu-container.sh
+  echo "Ubuntu 24.04 ($PACKAGE): install, sandboxed launch, upgrade, retention and rejected tampering passed"
+fi
+
+if [[ "$TARGET" == all || "$TARGET" == arch ]]; then
+  docker run --rm --platform linux/amd64 \
+    -v "$PUBLICATION:/publication:ro" -v "$SCRIPT_DIR:/test:ro" \
+    -e GENERATION="$GENERATION" -e FINGERPRINT="$FINGERPRINT" \
+    -e PREFIX="$PREFIX" -e PACKAGE="$PACKAGE" -e APP="$APP" \
+    -e DO_NOT_TRACK=1 \
+    "$ARCH_IMAGE" bash /test/verify-arch-container.sh
+  echo "Arch ($PACKAGE): signed install, dependency closure, retention and rejected tampering passed"
+fi

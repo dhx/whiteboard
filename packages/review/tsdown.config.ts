@@ -38,7 +38,6 @@ export default defineConfig({
     cli: "src/cli.ts",
     runtime: "src/runtime.ts",
     "server/desktop-host": "src/server/desktop-host.ts",
-    "software-map-model": "src/software-map-model.ts",
     "mcp-http": "src/review-api/mcp-http.ts",
   },
   platform: "node",
@@ -64,6 +63,8 @@ export default defineConfig({
       /^@dev\.fast\/review-share-protocol$/,
       /^@dev\.fast\/trace-protocol$/,
       /^isomorphic-git$/,
+      // Bundled to keep its KaTeX dependency out of the runtime.
+      /^micromark-extension-math$/,
     ],
     // Re-inlining core's public declaration graph exhausts the default Node heap.
     // Its only remaining declaration edge is the side-effect import handled above.

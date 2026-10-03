@@ -1,4 +1,5 @@
-import type { ReviewNodeTint, ReviewTheme } from "../debug-settings";
+import type { ReviewNodeTint, ReviewTheme } from "@canvas/debug-settings";
+
 import type {
   C4LayoutResult,
   C4MapAnyFlowNode,
@@ -457,30 +458,6 @@ export function focusSoftwareMapKeyboardTarget(element: HTMLElement | null) {
   element.focus({ preventScroll: true });
 }
 
-export function observeSoftwareMapVisibility(
-  element: Element,
-  onVisible: () => void,
-) {
-  if (typeof IntersectionObserver === "undefined") {
-    onVisible();
-
-    return () => {};
-  }
-
-  const observer = new IntersectionObserver(
-    (entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      onVisible();
-      observer.disconnect();
-    },
-    { rootMargin: "200px" },
-  );
-
-  observer.observe(element);
-
-  return () => observer.disconnect();
-}
-
 export function softwareMapOverlayClassName({
   theme,
   nodeTint,
@@ -490,9 +467,9 @@ export function softwareMapOverlayClassName({
 }) {
   return [
     "software-map-overlay",
-    // The overlay portals to document.body, outside the canvas root that
-    // carries the dark token definitions — so it must bring the token scope
-    // along itself.
+    // The overlay portals into the canvas container, outside .review-app, so
+    // it carries its own scope root (the dark tokens) and theme classes;
+    // softwareMapOverlayProps adds the matching StyleX theme and appMarker.
     "review-canvas-root",
     "review-app",
     `review-app--theme-${theme}`,

@@ -1,3 +1,4 @@
+import { reviewBottomScrollPadding } from "../browser/reviewScrollPadding.js";
 import { observableValue } from "../../base/common/observable.js";
 import type { ReviewDiffProgressState, ReviewDiffSection } from "../common/reviewProtocol.js";
 /*---------------------------------------------------------------------------------------------
@@ -28,6 +29,10 @@ export interface ReviewMultiDiffHeaderEntry {
   readonly deletions?: number;
 	/** Why the file starts collapsed, e.g. "Generated file · hidden by default". */
 	readonly note?: string;
+	/** Tooltip for the note, e.g. why a file stays folded. */
+	readonly noteTooltip?: ReviewTooltipContent;
+	/** A file with no text to diff: it stays folded and its header never opens it. */
+	readonly collapseLocked?: boolean;
 	/** Tooltip for the counts: what is left of the file, then its whole. */
 	readonly countsTooltip?: ReviewTooltipContent;
 	readonly sectionId?: string;
@@ -43,6 +48,10 @@ export interface ReviewMultiDiffHeaderEntry {
 export class ReviewMultiDiffUIElementFactory
   implements IWorkbenchUIElementFactory
 {
+
+  bottomScrollPadding = reviewBottomScrollPadding;
+  alwaysShowScrollbars = false;
+  scrollbarBelowResourceHeader = false;
 
   get headerClickToCollapse(): boolean {
     return !this.hideResourceHeader;
@@ -66,6 +75,10 @@ export class ReviewMultiDiffUIElementFactory
     private readonly instantiationService: IInstantiationService,
     @IHoverService private readonly hoverService: IHoverService,
   ) {}
+
+	isResourceCollapseLocked(uris: Parameters<IResourceHeaderMetadata["setUris"]>[0]): boolean {
+		return !!uris && !!this.entries().find(entry => sameResource(entry.original, uris.original) && sameResource(entry.modified, uris.modified))?.collapseLocked;
+	}
 
 	getResourceSectionId(uris: Parameters<IResourceHeaderMetadata["setUris"]>[0]): string | undefined {
 		// Lens entries encode their section identity in both source URI fragments.
@@ -153,6 +166,7 @@ export class ReviewMultiDiffUIElementFactory
 		const note = ownerDocument.createElement("span");
 		note.className = "review-multidiff-note";
 		element.append(note);
+		const noteTooltip = new ReviewTooltip(this.hoverService, note);
 
     const openContainer = ownerDocument.createElement("span");
     openContainer.className = "review-multidiff-open-container";
@@ -209,6 +223,7 @@ export class ReviewMultiDiffUIElementFactory
 
 			note.hidden = !current.note;
 			note.textContent = current.note ?? "";
+			noteTooltip.content = current.noteTooltip;
         openContainer.hidden = !current.onDidOpen;
 		};
 		return {
@@ -216,6 +231,7 @@ export class ReviewMultiDiffUIElementFactory
 			dispose: () => {
 				this.headers.delete(refresh);
 				countsTooltip.dispose();
+				noteTooltip.dispose();
 				viewed.dispose();
         openListener.dispose();
         open.dispose();

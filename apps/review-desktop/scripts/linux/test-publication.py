@@ -23,13 +23,14 @@ class PublicationTests(unittest.TestCase):
         self.failure = None
         self.pointer_failure = False
         self.channel = None
+        self.whiteboard_supported = True
         self.seal("1.2.3", "a" * 40)
 
     def seal(self, version, commit, prefix="repos"):
         self.prefix = prefix
         self.pointer_key = f"{prefix}/current.json"
         self.package_key = f"{prefix}/package"
-        self.current = dict(schemaVersion=1, format="rpm", generation=f"{version}-1-{commit}",
+        self.current = dict(schemaVersion=1, format="rpm", packageName="whiteboard-preview" if prefix == "repos/preview" else "whiteboard", generation=f"{version}-1-{commit}",
                             version=version, commit=commit, keyFingerprint="B" * 40)
         (self.root / prefix).mkdir(parents=True, exist_ok=True)
         (self.root / self.pointer_key).write_text(json.dumps(self.current))
@@ -41,6 +42,8 @@ class PublicationTests(unittest.TestCase):
         url = url.full_url
         self.requests.append(url)
         body = {"schemaVersion": 1, "format": "rpm"} if url.endswith("/health") else {"version": self.current["commit"], "productVersion": self.current["version"]}
+        if url.endswith("/repos/whiteboard/health"):
+            body = {"schemaVersion": 1, "packageNames": ["whiteboard", "whiteboard-preview"] if self.whiteboard_supported else []}
         return io.BytesIO(json.dumps(body).encode())
 
     def aws(self, *args):
@@ -55,12 +58,12 @@ class PublicationTests(unittest.TestCase):
         if args[0] == "put-object" and args[args.index("--key") + 1] == self.pointer_key and self.pointer_failure:
             raise RuntimeError("PreconditionFailed: concurrent promotion")
         if args[0] == "head-object":
-            return {"Metadata": {"sha256": self.digests[self.package_key]}}
+            return {"Metadata": {"sha256": self.digests[args[args.index("--key") + 1]]}}
         return {}
 
-    def publish(self):
+    def publish(self, **kwargs):
         with patch.object(publisher, "aws", self.aws), patch.object(publisher.urllib.request, "urlopen", self.request):
-            publisher.publish(self.root, "test-bucket", "https://example.test", self.channel)
+            publisher.publish(self.root, "test-bucket", "https://example.test", self.channel, **kwargs)
 
     def writes(self):
         return [call for call in self.calls if call[0] == "put-object"]
@@ -69,6 +72,76 @@ class PublicationTests(unittest.TestCase):
         self.publish()
         self.assertEqual([call[call.index("--key") + 1] for call in self.writes()], ["repos/package", "repos/current.json"])
         self.assertIn("--if-none-match", self.writes()[-1])
+
+    def seal_formats(self):
+        del self.digests[self.package_key]
+        for name in ["repos/rpm/x86_64/Packages/app.rpm", "repos/apt/pool/app.deb",
+                     "repos/arch/x86_64/app.pkg.tar.zst", "repos/keys/public.asc"]:
+            file = self.root / name
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(name.encode())
+            self.digests[name] = publisher.checksum(file)
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+
+    def test_upload_workers_partition_objects_without_promoting(self):
+        self.seal_formats()
+        uploaded = []
+        for format in ["rpm", "deb", "arch"]:
+            self.calls.clear()
+            self.publish(upload_format=format)
+            keys = [call[call.index("--key") + 1] for call in self.writes()]
+            self.assertNotIn(self.pointer_key, keys)
+            self.assertTrue(keys)
+            self.assertTrue(all(publisher.publication_format(key) == format for key in keys))
+            uploaded.extend(keys)
+        self.assertEqual(len(uploaded), len(set(uploaded)))
+        self.assertEqual(set(uploaded), set(self.digests) - {self.pointer_key})
+
+    def test_promotion_verifies_every_remote_object_before_pointer_write(self):
+        self.seal_formats()
+        self.publish(promote_only=True)
+        keys = [call[call.index("--key") + 1] for call in self.calls if call[0] == "head-object"]
+        self.assertEqual(set(keys), set(self.digests) - {self.pointer_key})
+        self.assertEqual(len(self.writes()), 1)
+        self.assertEqual(self.writes()[0][self.writes()[0].index("--key") + 1], self.pointer_key)
+        self.assertIn("--if-none-match", self.writes()[0])
+
+    def test_missing_or_mismatched_upload_blocks_promotion(self):
+        self.seal_formats()
+        original = self.aws
+        for missing in [True, False]:
+            self.calls.clear()
+            def fail_head(*args):
+                if args[0] == "head-object":
+                    if missing:
+                        raise RuntimeError("NoSuchKey")
+                    return {"Metadata": {"sha256": "wrong"}}
+                return original(*args)
+            self.aws = fail_head
+            with self.assertRaises(RuntimeError):
+                self.publish(promote_only=True)
+            self.assertEqual(self.writes(), [])
+
+    def test_separate_promotion_still_rejects_stale_release(self):
+        self.previous = {**self.current, "generation": "1.2.4-1-" + "c" * 40}
+        with self.assertRaisesRegex(ValueError, "newer package"):
+            self.publish(promote_only=True)
+        self.assertEqual(self.writes(), [])
+
+    def test_unsupported_worker_is_rejected_before_uploads(self):
+        self.whiteboard_supported = False
+        with self.assertRaisesRegex(RuntimeError, "Whiteboard repository Worker"):
+            self.publish()
+        self.assertEqual(self.calls, [])
+
+    def test_package_name_must_match_channel(self):
+        self.current["packageName"] = "whiteboard-preview"
+        (self.root / self.pointer_key).write_text(json.dumps(self.current))
+        self.digests[self.pointer_key] = publisher.checksum(self.root / self.pointer_key)
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+        with self.assertRaisesRegex(ValueError, "Invalid Linux package name"):
+            self.publish()
+        self.assertEqual(self.calls, [])
 
     def test_preview_channel_publishes_its_own_pointer_and_feed(self):
         self.seal("1.2.4~preview.20260922.7", "d" * 40, prefix="repos/preview")
@@ -124,6 +197,96 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Deploy the Linux repository Worker"):
                 self.publish()
         self.assertEqual(self.writes(), [])
+
+    def seal_apt(self):
+        self.current["deb"] = True
+        (self.root / self.pointer_key).write_text(json.dumps(self.current))
+        self.digests[self.pointer_key] = publisher.checksum(self.root / self.pointer_key)
+        for name in ["InRelease", "Release", "Release.gpg", "main/binary-amd64/Packages", "main/binary-amd64/Packages.gz"]:
+            key = f"{self.prefix}/snapshots/{self.current['generation']}/apt/dists/{self.channel or 'stable'}/{name}"
+            path = self.root / key
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"sealed APT metadata")
+            self.digests[key] = publisher.checksum(path)
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+
+    def test_apt_publication_requires_worker_support_before_upload(self):
+        self.seal_apt()
+        with self.assertRaisesRegex(RuntimeError, "Deploy the Ubuntu repository Worker"):
+            self.publish()
+        self.assertEqual(self.writes(), [])
+
+    def test_incomplete_apt_snapshot_cannot_be_promoted(self):
+        self.seal_apt()
+        missing = next(key for key in self.digests if key.endswith("InRelease"))
+        del self.digests[missing]
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+        original = self.request
+        def with_apt(url, **kwargs):
+            if url.full_url.endswith("/apt/health"):
+                return io.BytesIO(b'{"schemaVersion":1,"format":"deb"}')
+            return original(url, **kwargs)
+        self.request = with_apt
+        with self.assertRaisesRegex(ValueError, "Incomplete APT publication"):
+            self.publish()
+        self.assertEqual(self.writes(), [])
+
+    def test_apt_and_rpm_promote_together_after_all_uploads(self):
+        self.seal_apt()
+        original = self.request
+        def with_apt(url, **kwargs):
+            if url.full_url.endswith("/apt/health"):
+                return io.BytesIO(b'{"schemaVersion":1,"format":"deb"}')
+            return original(url, **kwargs)
+        self.request = with_apt
+        self.publish()
+        keys = [call[call.index("--key") + 1] for call in self.writes()]
+        self.assertEqual(keys[-1], self.pointer_key)
+        self.assertEqual(set(keys), set(self.digests))
+
+    def seal_arch(self):
+        self.current["arch"] = True
+        (self.root / self.pointer_key).write_text(json.dumps(self.current))
+        self.digests[self.pointer_key] = publisher.checksum(self.root / self.pointer_key)
+        for name in ["db", "db.sig", "files", "files.sig"]:
+            key = f"{self.prefix}/snapshots/{self.current['generation']}/arch/x86_64/{self.current['packageName']}.{name}"
+            path = self.root / key
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"sealed pacman database")
+            self.digests[key] = publisher.checksum(path)
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+
+    def with_arch_worker(self):
+        original = self.request
+        def request(url, **kwargs):
+            if url.full_url.endswith("/arch/health"):
+                return io.BytesIO(b'{"schemaVersion":1,"format":"pacman"}')
+            return original(url, **kwargs)
+        self.request = request
+
+    def test_arch_publication_requires_worker_support_before_upload(self):
+        self.seal_arch()
+        with self.assertRaisesRegex(RuntimeError, "Deploy the Arch repository Worker"):
+            self.publish()
+        self.assertEqual(self.writes(), [])
+
+    def test_incomplete_arch_snapshot_cannot_be_promoted(self):
+        self.seal_arch()
+        missing = next(key for key in self.digests if key.endswith(".db.sig"))
+        del self.digests[missing]
+        (self.root / "sha256.json").write_text(json.dumps(self.digests))
+        self.with_arch_worker()
+        with self.assertRaisesRegex(ValueError, "Incomplete Arch publication"):
+            self.publish()
+        self.assertEqual(self.writes(), [])
+
+    def test_arch_promotes_with_the_pointer_after_all_uploads(self):
+        self.seal_arch()
+        self.with_arch_worker()
+        self.publish()
+        keys = [call[call.index("--key") + 1] for call in self.writes()]
+        self.assertEqual(keys[-1], self.pointer_key)
+        self.assertEqual(set(keys), set(self.digests))
 
     def test_changed_sealed_bytes_fail_before_upload(self):
         (self.root / "repos/package").write_bytes(b"changed")

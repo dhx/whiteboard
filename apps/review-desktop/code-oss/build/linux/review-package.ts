@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync } from 'node:child_process';
-import { chmod, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { additionalDeps, recommendedDeps } from './rpm/dep-lists.ts';
 
@@ -16,9 +16,9 @@ export interface ReviewPackageProduct {
 }
 
 export interface ReviewPackage {
-	/** RPM package name: dev-fast-review or dev-fast-review-preview. */
 	name: string;
-	/** Installed application directory and command name: review or review-preview. */
+	legacyName: string;
+	legacyApp: string;
 	app: string;
 	appName: string;
 	appId: string;
@@ -42,10 +42,12 @@ export function reviewPackage(product: ReviewPackageProduct, version: string, re
 		throw new Error('Linux packages need a lowercase applicationName');
 	}
 	const rpmVersion = prerelease ? `${release}~${prerelease}` : release;
-	const name = `dev-fast-${product.applicationName}`;
+	const name = `whiteboard${prerelease ? '-preview' : ''}`;
 	return {
 		name,
-		app: product.applicationName,
+		legacyName: `dev-fast-review${prerelease ? '-preview' : ''}`,
+		legacyApp: `review${prerelease ? '-preview' : ''}`,
+		app: name,
 		appName: product.nameShort,
 		appId: product.darwinBundleIdentifier,
 		rpmVersion,
@@ -59,24 +61,25 @@ async function loadReviewPackage(appRoot: string) {
 	const source = join(appRoot, 'VSCode-linux-x64');
 	const product = JSON.parse(await readFile(join(source, 'resources/app/product.json'), 'utf8'));
 	if (product.reviewVersion !== metadata.version || !/^[a-f0-9]{40}$/.test(product.commit ?? '')) {
-		throw new Error('Linux payload must carry the stamped Review version and source commit');
+		throw new Error('Linux payload must carry the stamped Whiteboard version and source commit');
 	}
-	return { pkg: reviewPackage(product, metadata.version), source, urlProtocol: product.urlProtocol };
+	return { pkg: reviewPackage(product, metadata.version), source, product };
 }
 
-/** Stage the Review runtime for the existing Code OSS RPM build task. */
-export async function prepareReviewRpmPackage(codeRoot: string, arch: string): Promise<void> {
-	if (arch !== 'x86_64') { throw new Error('Review Linux packages currently support x86_64 only'); }
+/** Stage the same desktop, CLI and bundled runtime for every system package. */
+async function stageReviewPackage(codeRoot: string, destination: string) {
 	const appRoot = resolve(codeRoot, '..');
 	const monorepoRoot = resolve(appRoot, '../..');
-	const { pkg, source, urlProtocol } = await loadReviewPackage(appRoot);
-	const { name, app, appName, appId } = pkg;
+	const { pkg, source, product } = await loadReviewPackage(appRoot);
+	const { app, appName, appId, legacyApp, legacyName: name } = pkg;
+	const { urlProtocol } = product;
 	const share = `/usr/share/${app}`;
-	const rpmRoot = join(codeRoot, '.build/linux/rpm/x86_64/rpmbuild');
-	const destination = join(rpmRoot, 'BUILD');
+
 	await rm(destination, { recursive: true, force: true });
 	await mkdir(destination, { recursive: true });
 	await cp(source, join(destination, share), { recursive: true, verbatimSymlinks: true });
+	await rename(join(destination, share, product.applicationName), join(destination, share, app));
+	await writeFile(join(destination, share, 'resources/app/product.json'), JSON.stringify({ ...product, applicationName: app }, null, '\t'));
 	// The Code OSS bin/<app> command opens editors. The public command is the
 	// Review agent CLI; keep the app executable behind a distinct desktop launcher.
 	await rm(join(destination, share, 'bin'), { recursive: true, force: true });
@@ -123,15 +126,24 @@ MimeType=x-scheme-handler/${urlProtocol};
   <metadata_license>CC0-1.0</metadata_license><project_license>MIT</project_license>
   <launchable type="desktop-id">${name}.desktop</launchable>
   <url type="homepage">https://dev.fast/</url>
-  <description><p>Review turns code changes into guided, interactive reviews with code, traces, and agent discussions.</p></description>
+  <description><p>Whiteboard turns code changes into guided, interactive reviews with code, traces, and agent discussions.</p></description>
 </component>
 `);
 	const icon = join(destination, `usr/share/icons/hicolor/512x512/apps/${app}.png`);
 	await mkdir(dirname(icon), { recursive: true });
-	await cp(join(monorepoRoot, `packages/review/app/icons/${app}-square-512.png`), icon);
+	await cp(join(monorepoRoot, `packages/review/app/icons/${legacyApp}-square-512.png`), icon);
 	// Electron's packaged sandbox helper must be root-owned with setuid in the
 	// system package. Package creation sets ownership; no runtime chmod is needed.
 	await chmod(join(destination, share, 'chrome-sandbox'), 0o4755);
+	return { pkg, share, write };
+}
+
+/** Stage the Review runtime for the existing Code OSS RPM build task. */
+export async function prepareReviewRpmPackage(codeRoot: string, arch: string): Promise<void> {
+	if (arch !== 'x86_64') { throw new Error('Review Linux packages currently support x86_64 only'); }
+	const rpmRoot = join(codeRoot, '.build/linux/rpm/x86_64/rpmbuild');
+	const { pkg, share } = await stageReviewPackage(codeRoot, join(rpmRoot, 'BUILD'));
+	const { name, app, appName, legacyName } = pkg;
 	const dependencies = [...additionalDeps.filter(dep => !dep.startsWith('rpmlib(')), 'git', 'libsecret-1.so.0()(64bit)', 'libkrb5.so.3()(64bit)', 'libnotify.so.4()(64bit)', '/bin/sh'];
 	await mkdir(join(rpmRoot, 'SPECS'), { recursive: true });
 	await writeFile(join(rpmRoot, 'SPECS/review.spec'), String.raw`Name: ${name}
@@ -144,6 +156,8 @@ Vendor: dev.fast
 Packager: dev.fast <support@dev.fast>
 BuildArch: x86_64
 Requires: ${dependencies.join(', ')}
+Provides: ${pkg.legacyName} = ${pkg.rpmVersion}-${pkg.revision}
+Obsoletes: ${pkg.legacyName} < ${pkg.rpmVersion}-${pkg.revision}
 Recommends: ${recommendedDeps.join(', ')}
 
 # Keep ELF dependency discovery, but do not require system Node for scripts
@@ -158,7 +172,7 @@ Recommends: ${recommendedDeps.join(', ')}
 
 %description
 ${appName} turns code changes into guided, interactive reviews with code, traces,
-and agent discussions. Includes the Review CLI and its runtime.
+and agent discussions. Includes the Whiteboard CLI and its runtime.
 
 %install
 mkdir -p %{buildroot}
@@ -178,11 +192,16 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache 
 /usr/bin/${app}-desktop
 ${share}/
 %attr(4755,root,root) ${share}/chrome-sandbox
-/usr/share/applications/${name}.desktop
-/usr/share/applications/${name}-url-handler.desktop
-/usr/share/metainfo/${name}.metainfo.xml
+/usr/share/applications/${legacyName}.desktop
+/usr/share/applications/${legacyName}-url-handler.desktop
+/usr/share/metainfo/${legacyName}.metainfo.xml
 /usr/share/icons/hicolor/512x512/apps/${app}.png
 `);
+}
+
+/** Stage the same install tree for pacman without depending on an RPM. */
+export async function prepareReviewArchPackage(codeRoot: string): Promise<void> {
+	await stageReviewPackage(codeRoot, join(codeRoot, '.build/linux/arch/x86_64/package'));
 }
 
 /** Keep rpmbuild state under the package output directory without changing HOME. */
@@ -192,4 +211,103 @@ export async function buildReviewRpmPackage(codeRoot: string, arch: string): Pro
 	const { pkg } = await loadReviewPackage(resolve(codeRoot, '..'));
 	execFileSync('rpmbuild', ['--define', `_topdir ${rpmRoot}`, '-bb', join(rpmRoot, 'SPECS/review.spec'), '--target', arch], { stdio: 'inherit' });
 	await cp(join(rpmRoot, 'RPMS/x86_64', pkg.file), join(rpmRoot, '..', pkg.file));
+}
+
+/** Find dependencies of every shipped ELF, including the bundled Review runtime. */
+async function debDependencies(destination: string): Promise<string> {
+	const binaries: string[] = [];
+	const libraries = new Set<string>();
+	async function visit(directory: string): Promise<void> {
+		for (const entry of await readdir(directory, { withFileTypes: true })) {
+			const file = join(directory, entry.name);
+			if (entry.isDirectory()) { await visit(file); }
+			else if (entry.isFile()) {
+				const handle = await open(file, 'r');
+				const magic = Buffer.alloc(4);
+				try { await handle.read(magic, 0, 4, 0); } finally { await handle.close(); }
+				if (magic.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) {
+					binaries.push(file);
+					libraries.add(directory);
+				}
+			}
+		}
+	}
+	await visit(join(destination, 'usr'));
+	if (!binaries.length) { throw new Error('Debian package contains no ELF binaries'); }
+	// dpkg-shlibdeps requires a source control file. Private bundled libraries
+	// have no package metadata, but unresolved libraries must still fail.
+	const work = join(destination, '..', 'shlibdeps');
+	await mkdir(join(work, 'debian'), { recursive: true });
+	await writeFile(join(work, 'debian/control'), 'Source: review\n\nPackage: review\nArchitecture: amd64\n');
+	const result = execFileSync('dpkg-shlibdeps', [
+		'-O', '--ignore-missing-info', ...Array.from(libraries, dir => `-l${dir}`),
+		...binaries.map(file => `-e${file}`),
+	], { cwd: work, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+	const generated = result.trim().match(/^shlibs:Depends=(.+)$/m)?.[1];
+	if (!generated) { throw new Error('dpkg-shlibdeps returned no dependencies'); }
+	return `${generated}, ca-certificates, git, libsecret-1-0, libkrb5-3, libnotify4, xdg-utils`;
+}
+
+export async function prepareReviewDebPackage(codeRoot: string, arch: string): Promise<void> {
+	if (arch !== 'amd64') { throw new Error('Review Ubuntu packages currently support amd64 only'); }
+	const destination = join(codeRoot, '.build/linux/deb/amd64/package');
+	const { pkg, share, write } = await stageReviewPackage(codeRoot, destination);
+	const dependencies = await debDependencies(destination);
+	const installedSize = execFileSync('du', ['-sk', destination], { encoding: 'utf8' }).split(/\s+/)[0];
+	await write('DEBIAN/control', `Package: ${pkg.name}
+Version: ${pkg.rpmVersion}-${pkg.revision}
+Architecture: amd64
+Section: devel
+Priority: optional
+Installed-Size: ${installedSize}
+Maintainer: dev.fast <support@dev.fast>
+Homepage: https://dev.fast/
+Depends: ${dependencies}
+Provides: ${pkg.legacyName} (= ${pkg.rpmVersion}-${pkg.revision})
+Conflicts: ${pkg.legacyName}
+Replaces: ${pkg.legacyName}
+Description: ${pkg.appName} - guided code reviews with your coding agents
+ Includes the desktop app, agent CLI and bundled runtime.
+`);
+	// Ubuntu restricts unprivileged user namespaces. Grant them only to our
+	// installed executable so Chromium can keep its sandbox enabled.
+	await write(`etc/apparmor.d/${pkg.legacyName}`, `abi <abi/4.0>,
+include <tunables/global>
+profile ${pkg.legacyName} ${share}/${pkg.app} flags=(unconfined) {
+  userns,
+  include if exists <local/${pkg.legacyName}>
+}
+`);
+	await write('DEBIAN/conffiles', `/etc/apparmor.d/${pkg.legacyName}\n`);
+	await write('DEBIAN/postinst', `#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+  if command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+    apparmor_parser -r /etc/apparmor.d/${pkg.legacyName}
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q; fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor; fi
+fi
+`, 0o755);
+	await write('DEBIAN/prerm', `#!/bin/sh
+set -e
+if [ "$1" = remove ] && command -v apparmor_parser >/dev/null 2>&1 && [ -d /sys/kernel/security/apparmor ]; then
+  apparmor_parser -R /etc/apparmor.d/${pkg.legacyName}
+fi
+`, 0o755);
+	await write('DEBIAN/postrm', `#!/bin/sh
+set -e
+if [ "$1" = remove ] || [ "$1" = purge ]; then
+  if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q; fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor; fi
+fi
+`, 0o755);
+}
+
+export async function buildReviewDebPackage(codeRoot: string, arch: string): Promise<void> {
+	if (arch !== 'amd64') { throw new Error('Review Ubuntu packages currently support amd64 only'); }
+	const root = join(codeRoot, '.build/linux/deb/amd64');
+	const { pkg } = await loadReviewPackage(resolve(codeRoot, '..'));
+	execFileSync('dpkg-deb', ['--root-owner-group', '-Zxz', '--build', join(root, 'package'),
+		join(root, `${pkg.name}_${pkg.rpmVersion}-${pkg.revision}_amd64.deb`)], { stdio: 'inherit' });
 }

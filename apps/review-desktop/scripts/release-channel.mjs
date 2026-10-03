@@ -7,6 +7,18 @@ const RELEASE_IDENTITIES = Object.freeze({
     sharedDataFolderName: ".dev-fast-review-shared",
     darwinBundleIdentifier: "dev.fast.review",
     urlProtocol: "dev-fast-review",
+    win32MutexName: "devfastreview",
+    win32DirName: "Review",
+    win32NameVersion: "/dev/fast Whiteboard",
+    win32RegValueName: "Review",
+    win32x64AppId: "{{B35E642E-885D-48BC-8386-C06377164CC5}",
+    win32arm64AppId: "{{6854770A-F656-4CAC-9F4C-A50D0B97F241}",
+    win32x64UserAppId: "{{78391143-AA32-4906-AF1B-54B2248A214A}",
+    win32arm64UserAppId: "{{E81529AA-7A0C-43B8-956F-9DDAD5A1AA5F}",
+    win32AppUserModelId: "devfast.Review",
+    win32ShellNameShort: "Whiteboard",
+    win32TunnelServiceMutex: "devfastreview-tunnelservice",
+    win32TunnelMutex: "devfastreview-tunnel",
   }),
   preview: Object.freeze({
     nameShort: "Whiteboard Preview",
@@ -16,6 +28,18 @@ const RELEASE_IDENTITIES = Object.freeze({
     sharedDataFolderName: ".dev-fast-review-preview-shared",
     darwinBundleIdentifier: "dev.fast.review.preview",
     urlProtocol: "dev-fast-review-preview",
+    win32MutexName: "devfastreviewPreview",
+    win32DirName: "Review Preview",
+    win32NameVersion: "/dev/fast Whiteboard Preview",
+    win32RegValueName: "ReviewPreview",
+    win32x64AppId: "{{D252CCAD-D236-4082-9E8D-358065D0663B}",
+    win32arm64AppId: "{{63B61266-6B44-46E4-89CA-55BF1FBEBBA2}",
+    win32x64UserAppId: "{{BFADA66E-FC12-452C-9F6F-09B38530CA2D}",
+    win32arm64UserAppId: "{{AC7786E1-8977-4AEB-A14F-72A8E77A6EC3}",
+    win32AppUserModelId: "devfast.ReviewPreview",
+    win32ShellNameShort: "Whiteboard Preview",
+    win32TunnelServiceMutex: "devfastreview-tunnelservicePreview",
+    win32TunnelMutex: "devfastreview-tunnelPreview",
   }),
 });
 
@@ -56,8 +80,16 @@ export function updateBundlesFor(channel) {
   return UPDATE_BUNDLES[channel];
 }
 
-export function updateZipName(artifact, version) {
-  return `${artifact}-darwin-arm64-${version}.zip`;
+export function darwinTarget(arch = process.arch) {
+  if (arch !== "arm64" && arch !== "x64") {
+    throw new Error(`unsupported macOS arch ${arch}`);
+  }
+
+  return `darwin-${arch}`;
+}
+
+export function updateZipName(artifact, version, target) {
+  return `${artifact}-${target}-${version}.zip`;
 }
 
 if (process.argv[1] === new URL(import.meta.url).pathname) {

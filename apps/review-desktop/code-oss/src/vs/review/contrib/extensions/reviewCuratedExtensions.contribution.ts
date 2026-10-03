@@ -7,10 +7,10 @@ import { localize, localize2 } from '../../../nls.js';
 import { Codicon } from '../../../base/common/codicons.js';
 import { getErrorMessage } from '../../../base/common/errors.js';
 import { DisposableStore } from '../../../base/common/lifecycle.js';
-import { isLinux, isMacintosh } from '../../../base/common/platform.js';
+import { isLinux, isMacintosh, isWindows } from '../../../base/common/platform.js';
 import { ThemeIcon } from '../../../base/common/themables.js';
 import { URI } from '../../../base/common/uri.js';
-import { ipcRenderer } from '../../../base/parts/sandbox/electron-browser/globals.js';
+import { ipcRenderer, process } from '../../../base/parts/sandbox/electron-browser/globals.js';
 import { Action2, MenuId, MenuRegistry, registerAction2 } from '../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../platform/commands/common/commands.js';
 import { IConfigurationService, ConfigurationTarget } from '../../../platform/configuration/common/configuration.js';
@@ -62,7 +62,8 @@ const BUNDLED_EXTENSIONS: readonly { id: string; label: string }[] = [
 	{ id: 'astral-sh.ty', label: localize('review.curated.ty', "Python type checking (ty)") },
 	{ id: 'charliermarsh.ruff', label: localize('review.curated.ruff', "Python lint and format (ruff)") },
 	{ id: 'vscodevim.vim', label: localize('review.curated.vim', "Vim keybindings") },
-	{ id: 'tuttieee.emacs-mcx', label: localize('review.curated.emacs', "Emacs keybindings") }
+	{ id: 'tuttieee.emacs-mcx', label: localize('review.curated.emacs', "Emacs keybindings") },
+	{ id: 'ms-vscode.sublime-keybindings', label: localize('review.curated.sublime', "Sublime Text keybindings") }
 ];
 
 const OPTIONAL_GROUPS: readonly { group: string; label: string; detail?: string }[] = [
@@ -90,10 +91,11 @@ type CuratedQuickPickItem = IQuickPickItem & (
 	| { kind: 'optional'; group: string }
 );
 
-/** The two keymaps fight over the same keys, so only one may be on at a time. */
+/** The keymaps fight over the same keys, so only one may be on at a time. */
 const KEYMAP_EXTENSION_IDS: Readonly<Record<Exclude<ReviewKeymap, 'none'>, string>> = {
 	vim: 'vscodevim.vim',
 	emacs: 'tuttieee.emacs-mcx',
+	sublime: 'ms-vscode.sublime-keybindings',
 };
 const KEYMAP_IDS = Object.values(KEYMAP_EXTENSION_IDS);
 
@@ -210,7 +212,7 @@ function findInstalled(installed: readonly ILocalExtension[], id: string): ILoca
 }
 
 function optionalDownloadSize(group: string, installed: readonly ILocalExtension[]): number {
-	const target = isMacintosh ? 'darwin-arm64' : isLinux ? 'linux-x64' : undefined;
+	const target = isMacintosh ? (process.arch === 'x64' ? 'darwin-x64' : 'darwin-arm64') : isLinux ? 'linux-x64' : isWindows ? 'win32-x64' : undefined;
 	return reviewOptionalExtensionCatalog
 		.filter(extension => extension.group === group && !findInstalled(installed, extension.id))
 		.reduce((total, extension) => {
@@ -620,8 +622,8 @@ MenuRegistry.appendMenuItem(MenuId.MenubarPreferencesMenu, {
 
 /**
  * Seeds the shipped keymap defaults once per profile. An imported review.keymap
- * selects Vim or Emacs; otherwise both remain off. After that the user's choice
- * in the picker wins.
+ * selects Vim, Emacs, or Sublime Text; otherwise all remain off. After that the
+ * user's choice in the picker wins.
  */
 class CuratedExtensionDefaults implements IWorkbenchContribution {
 	constructor(

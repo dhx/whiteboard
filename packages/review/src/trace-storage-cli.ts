@@ -47,7 +47,7 @@ import {
 import { devReviewHome } from "./review-home-paths";
 
 /**
- * `whiteboard trace storage use` and `review trace config migrate`: the explicit
+ * `whiteboard trace storage use` and `whiteboard trace config migrate`: the explicit
  * selection and configuration commands. Both write only
  * `$DEV_REVIEW_HOME/trace/config.json`; the legacy files, environment, and
  * every remote object stay as they are.
@@ -129,7 +129,7 @@ export async function runTraceStorageUse(
 
       if (!setup.credentials && !isS3MockMode(scope.env)) {
         throw new TraceConfigurationError(
-          "No S3/R2 credentials are configured. Pass --endpoint, --bucket, --key, and --secret, or use Review Agent Setup.",
+          "No S3/R2 credentials are configured. Pass --endpoint, --bucket, --key, and --secret, or use Whiteboard Agent Setup.",
         );
       }
 
@@ -183,7 +183,7 @@ async function useHosted(
 
     if (!auth || auth.origin !== origin) {
       throw new TraceConfigurationError(
-        `Log in to ${origin} first: \`review login --origin ${origin}\`.`,
+        `Log in to ${origin} first: \`whiteboard login --origin ${origin}\`.`,
       );
     }
 
@@ -205,7 +205,7 @@ async function useHosted(
     } catch (error) {
       if (error instanceof StoreApiError && error.code === "upgrade_required") {
         throw new TraceConfigurationError(
-          `${origin} does not serve the trace store contract this Review needs. Hosted storage was not selected.`,
+          `${origin} does not serve the trace store contract this version of Whiteboard needs. Hosted storage was not selected.`,
         );
       }
 

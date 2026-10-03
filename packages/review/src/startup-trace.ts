@@ -9,10 +9,9 @@
 // browser requests, parallel worktree creation) nests correctly. The whole
 // span tree is flushed as JSON on process exit.
 //
-// The directory form exists for the authoring-latency harness: an agent runs
-// many `review` commands (some delegated to a second process), and each one
-// must land in its own file that the harness can join back to the agent's
-// tool call by wall-clock (`timeOrigin`) and `argv`.
+// The directory form suits runs of many `review` commands (some delegated to a
+// second process): each one lands in its own file, which a caller can join
+// back to what launched it by wall-clock (`timeOrigin`) and `argv`.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -115,21 +114,6 @@ export async function span<T>(
   }
 }
 
-function spanSync<T>(name: string, fn: () => T, detail?: string): T {
-  if (!traceEnabled) return fn();
-  const handle = startSpan(name, { detail });
-
-  try {
-    const result = context.run(handle.id, fn);
-    handle.end();
-
-    return result;
-  } catch (error) {
-    handle.fail(errorMessage(error));
-    throw error;
-  }
-}
-
 // Subprocess span. Name is `$ <cmd>` truncated; detail carries the full
 // command line and cwd so the harness can group by executable and verb.
 export function traceCommand<T>(
@@ -139,19 +123,6 @@ export function traceCommand<T>(
   options: { cwd?: string } = {},
 ): Promise<T> {
   return span(
-    commandSpanName(file, args),
-    fn,
-    commandDetail(file, args, options.cwd),
-  );
-}
-
-export function traceCommandSync<T>(
-  file: string,
-  args: string[],
-  fn: () => T,
-  options: { cwd?: string } = {},
-): T {
-  return spanSync(
     commandSpanName(file, args),
     fn,
     commandDetail(file, args, options.cwd),

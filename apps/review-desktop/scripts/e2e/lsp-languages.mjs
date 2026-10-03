@@ -16,9 +16,10 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 import {
+  closeSourceWindow,
   createReview,
-  dismissModalEditor,
   installExtensionGroup,
+  sourceWindowFor,
 } from "./harness.mjs";
 
 const exec = promisify(execFile);
@@ -84,6 +85,7 @@ export const LANGUAGES = {
     hoverText: /func SaveOrder\(order OrderRecord\) OrderRecord/,
     needsToolchain: "go",
     installsTool: "gopls",
+    welcomeTab: "Go for VS Code",
     hoverTimeout: 300000, // gopls is built from source under a fresh HOME, so the caches start empty.
     // Unset, every Go install and cache path sits under the temp $HOME; an empty value is a deletion.
     env: {
@@ -118,7 +120,9 @@ export const LANGUAGES = {
       activated: "Starting language client",
       started: "Using server binary at",
       failed: "Bootstrap error", // A server that could not be unpacked logs this instead: a different bug.
+      stopped: "Disposing language client",
     },
+    reopensReview: true,
     optionalExtension: {
       label: "Rust (rust-analyzer)",
       extensionId: "rust-lang.rust-analyzer",
@@ -212,9 +216,13 @@ async function serverNeverStarted(
   );
 }
 
-/** The same review, in the window a restart left behind. */
+/** The same review, in a fresh tab after its old one closed. */
 async function reopenReview(ctx, review) {
-  const opened = await ctx.api(`/reviews-api/${review.reviewId}/open`, "POST", {});
+  const opened = await ctx.api(
+    `/reviews-api/${review.reviewId}/open`,
+    "POST",
+    {},
+  );
 
   assert.equal(opened.status, 200, JSON.stringify(opened.value));
 
@@ -223,13 +231,33 @@ async function reopenReview(ctx, review) {
   return page.locator(".review-canvas-root [data-review-api]");
 }
 
+/** Closes the review's tab, which detaches its peek and releases the checkout behind it. */
+async function closeReview(ctx, canvas, title) {
+  const tab = canvas
+    .page()
+    .locator(".tabs-container .tab")
+    .filter({ hasText: title })
+    .first();
+
+  await tab.hover();
+  await tab.locator(".tab-actions .action-label").first().click();
+  await ctx.until(
+    async () => (await tab.count()) === 0,
+    `the ${title} tab to close`,
+    30000,
+  );
+}
+
 /** `go install` writes to GOPATH/bin, and GOPATH defaults to $HOME/go inside the temp root. */
 const goToolPath = (ctx, tool) => path.join(ctx.home, "go/bin", tool);
 
 /** Nothing the Go extension downloads may exist before the reader consents to its group. */
 async function assertNothingInstalledYet(ctx, tool) {
   assert.equal(
-    await access(goToolPath(ctx, tool)).then(() => true, () => false),
+    await access(goToolPath(ctx, tool)).then(
+      () => true,
+      () => false,
+    ),
     false,
     `${tool} was installed before the Go group was consented to`,
   );
@@ -247,7 +275,11 @@ async function assertNothingInstalledYet(ctx, tool) {
 /** Waits for the consented-to Go extension to provision `tool` into the journey's GOPATH. */
 async function provisionLanguageServer(ctx, tool) {
   await ctx.until(
-    () => access(goToolPath(ctx, tool)).then(() => true, () => false),
+    () =>
+      access(goToolPath(ctx, tool)).then(
+        () => true,
+        () => false,
+      ),
     `${tool} to be installed into the journey's GOPATH`,
     300000,
   );
@@ -314,46 +346,100 @@ export async function runLspJourney(ctx, id) {
     ],
   });
 
-  let canvas = review.canvas;
-
-  // rust-analyzer can lose a race with the workspace folder, and only a race earns a retry in another window.
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await hoverAndJump(ctx, id, language, canvas, lines, callLine);
-
-      return;
-    } catch (error) {
-      if (
-        attempt >= 3 ||
-        !language.serverStartLog ||
-        !(await serverNeverStarted(ctx, language.serverStartLog))
-      )
-        throw error;
-
-      await ctx.knownBug(
-        "A review's Rust language server never starts when the extension wins a race with the workspace folder",
+  try {
+    await hoverAndJump(ctx, id, language, review.canvas, lines, callLine);
+  } catch (error) {
+    // Name the old race when the extension activated and never tried to start its server.
+    if (
+      language.serverStartLog &&
+      (await serverNeverStarted(ctx, language.serverStartLog))
+    )
+      throw new Error(
+        `${language.serverStartLog.extensionId} activated before the review checkout was a workspace folder`,
+        { cause: error },
       );
-      await ctx.restartDesktop();
-      canvas = await reopenReview(ctx, review);
-    }
+
+    throw error;
+  }
+
+  if (!language.reopensReview) return;
+
+  await closeReview(ctx, review.canvas, review.title);
+  // Allow the folder release to reach the extension host before reopening.
+  await review.canvas.page().waitForTimeout(5000);
+
+  const canvas = await reopenReview(ctx, review);
+
+  try {
+    await hoverAndJump(
+      ctx,
+      id,
+      language,
+      canvas,
+      lines,
+      callLine,
+      " after the review reopens",
+    );
+  } catch (error) {
+    const log = await extensionLog(ctx, language.serverStartLog.extensionId);
+
+    if (log.includes(language.serverStartLog.stopped))
+      throw new Error(
+        `${language.serverStartLog.extensionId} stopped its client when the review released its last checkout`,
+        { cause: error },
+      );
+
+    throw error;
   }
 }
 
-/** The reader's half: from the open review to the modal editor Go to Definition opens. */
-async function hoverAndJump(ctx, id, language, canvas, lines, callLine) {
+/** The reader's half: from the open review to the Source window Go to Definition opens. */
+async function hoverAndJump(
+  ctx,
+  id,
+  language,
+  canvas,
+  lines,
+  callLine,
+  pass = "",
+) {
   const page = canvas.page();
 
   const editor = canvas
-    .locator(
-      `.review-inline-editor[data-review-inline-editor="${language.peekFile}"]`,
-    )
+    .locator(`[data-review-inline-editor="${language.peekFile}"]`)
     .first();
 
-  await editor.locator(".view-line").first().waitFor({ timeout: 60000 });
+  const welcome = page
+    .locator(".tabs-container .tab.active")
+    .filter({ hasText: language.welcomeTab });
+
+  // The Go extension opens its welcome page on first activation, over the review.
+  const leaveWelcome = async () => {
+    if (!language.welcomeTab || !(await welcome.count())) return;
+    await ctx.knownBug(
+      "Activating the Go extension opens its welcome page over the review",
+    );
+    await page
+      .locator(".tabs-container .tab")
+      .filter({ hasText: `${id} peek` })
+      .click();
+  };
+
+  await ctx.until(
+    async () => {
+      await leaveWelcome();
+
+      return editor.locator(".view-line").first().isVisible();
+    },
+    `the ${language.peekFile} peek`,
+    120000,
+  );
 
   // The peek opens the language's first document, so the extension activates only once it is on screen.
-  if (language.installsTool)
+  if (language.installsTool) {
     await provisionLanguageServer(ctx, language.installsTool);
+    await leaveWelcome();
+  }
 
   const callRow = editor
     .locator(".view-line")
@@ -404,26 +490,15 @@ async function hoverAndJump(ctx, id, language, canvas, lines, callLine) {
   );
 
   assert.match(hovered, language.hoverText);
-  ctx.check(`${id}: hover shows the signature from the language server`);
+  ctx.check(`${id}: hover shows the signature from the language server${pass}`);
 
   await page.keyboard.press("Escape");
   await token.click({ position: await aim() });
   await page.keyboard.press("F12");
 
-  // Go to Definition opens the file in the modal editor, whose header carries the resolved label: the cross-file evidence.
-  const modalTitle = page
-    .locator(".monaco-modal-editor-block .modal-editor-title")
-    .first();
-
-  // The label is the file name, not its path in the repository.
-  const definitionName = path.basename(language.definitionFile);
-
-  await ctx.until(
-    async () => (await modalTitle.innerText().catch(() => "")).includes(definitionName),
-    `${id} Go to Definition to open ${language.definitionFile} in the modal editor`,
-    60000,
+  // Go to Definition opens the file in a Source window whose active tab names it: the cross-file evidence.
+  await closeSourceWindow(
+    await sourceWindowFor(ctx, path.basename(language.definitionFile)),
   );
-  ctx.check(`${id}: go to definition crosses files`);
-
-  await dismissModalEditor(ctx, page);
+  ctx.check(`${id}: go to definition crosses files${pass}`);
 }

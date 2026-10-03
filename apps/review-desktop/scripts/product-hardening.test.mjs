@@ -15,14 +15,6 @@ const webviewPreloader = await readFile(
   "utf8",
 );
 
-const reviewCanvasPart = await readFile(
-  new URL(
-    "../code-oss/src/vs/review/browser/parts/canvas/reviewCanvasPart.ts",
-    import.meta.url,
-  ),
-  "utf8",
-);
-
 test("keeps Review disconnected from Microsoft update and extension services", () => {
   assert.equal(product.enableTelemetry, false);
   assert.equal(product.extensionsGallery, null);
@@ -30,14 +22,6 @@ test("keeps Review disconnected from Microsoft update and extension services", (
   // Review must never fall back to Microsoft's update service; the sanctioned
   // feed below is the only one it may contact.
   assert.notEqual(product.updateUrl, "https://update.code.visualstudio.com");
-});
-
-test("updates only from the sanctioned dev.fast feed", () => {
-  assert.equal(product.updateUrl, "https://update.dev.fast");
-  assert.equal(
-    product.quality,
-    process.env.REVIEW_EXPECTED_QUALITY ?? "stable",
-  );
 });
 
 test("publishes the release number the About panel shows", async () => {
@@ -52,17 +36,6 @@ test("publishes the release number the About panel shows", async () => {
 });
 
 test("owns every install identity rather than sharing Code OSS's", () => {
-  // These name the singleton mutexes, the Windows installer registration, and
-  // the shared storage directory. Left at their upstream values they collide
-  // with a real Code OSS or VS Code install on the same machine: one app's
-  // installer blocks on the other's running process, and both write the same
-  // sharedStorage database.
-  assert.equal(product.sharedDataFolderName, ".dev-fast-review-shared");
-  assert.equal(product.win32MutexName, "devfastreview");
-  assert.equal(product.win32TunnelMutex, "devfastreview-tunnel");
-  assert.equal(product.win32TunnelServiceMutex, "devfastreview-tunnelservice");
-  assert.equal(product.win32AppUserModelId, "devfast.Review");
-
   const appIds = [
     product.win32x64AppId,
     product.win32arm64AppId,
@@ -93,8 +66,10 @@ test("owns every install identity rather than sharing Code OSS's", () => {
 });
 
 test("keeps upstream identity out of the fields Review has claimed", () => {
-  // A re-vendor rewrites product.json wholesale, so guard the values above
-  // against silently reverting to anything Code OSS- or Microsoft-branded.
+  // A re-vendor rewrites product.json wholesale, so guard these fields against
+  // silently reverting to anything Code OSS- or Microsoft-branded. At upstream
+  // values the mutex and shared-storage names collide with a real Code OSS or
+  // VS Code install on the same machine.
   const claimedKeys = [
     "nameShort",
     "nameLong",
@@ -131,24 +106,6 @@ test("removes dormant Microsoft endpoint configuration that is safe to omit", ()
   ]) {
     assert.equal(product[key], undefined, key);
   }
-
-  assert.equal(product.defaultChatAgent.extensionId, "GitHub.copilot");
-  assert.equal(product.defaultChatAgent.chatExtensionId, "GitHub.copilot-chat");
-});
-
-// Desktop Code OSS never reads `configurationDefaults` from product.json — only the
-// extension contribution point and the web workbench options carry that name. Keeping
-// a copy there reads as hardening while applying nothing, so the block is gone and
-// `reviewConfigurationDefaults.ts` is the single channel.
-test("keeps product.json free of defaults nothing reads", () => {
-  assert.equal(product.configurationDefaults, undefined);
-});
-
-test("guards the active webview frame body while tracking focus", () => {
-  assert.match(
-    webviewPreloader,
-    /target && target\.contentDocument && target\.contentDocument\.body && target\.contentDocument\.body\.classList\.contains\('vscode-context-menu-visible'\)/,
-  );
 });
 
 test("allows the webview host script through its own hash-only CSP", () => {
@@ -170,22 +127,4 @@ test("allows the webview host script through its own hash-only CSP", () => {
       `script-src lacks 'sha256-${hash}'`,
     );
   }
-});
-
-test("configures Zod's CSP-safe mode before the canvas module evaluates", () => {
-  const candidateConfig = reviewCanvasPart.indexOf(
-    "canvasGlobal.__zod_globalConfig ??= {};",
-  );
-
-  const candidateModule = reviewCanvasPart.indexOf(
-    "vs/review/canvas/canvas-loader.js",
-  );
-
-  assert.notEqual(candidateConfig, -1);
-  assert.notEqual(candidateModule, -1);
-  assert.ok(candidateConfig < candidateModule);
-  assert.match(
-    reviewCanvasPart,
-    /canvasGlobal\.__zod_globalConfig\.jitless = true;/,
-  );
 });

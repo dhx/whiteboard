@@ -1,14 +1,17 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 
+import stylex from "@stylexjs/unplugin";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { sourceAliases } from "../test-config";
 import { scopeReviewCanvasCss } from "./desktop-css-scope";
 import {
   hardenLibavoidForTrustedTypes,
   isLibavoidBrowserModule,
 } from "./desktop-trusted-types";
+import { stylexOptions } from "./stylex-options";
 
 const require = createRequire(import.meta.url);
 
@@ -20,6 +23,9 @@ const decodeNamedCharacterReferenceIndex = path.join(
 export default defineConfig({
   root: __dirname,
   plugins: [
+    // Appends the collected StyleX rules to the canvas CSS asset in its own
+    // generateBundle, which runs before the scoping plugin below.
+    stylex.vite(stylexOptions),
     {
       name: "harden-libavoid-trusted-types",
       enforce: "pre",
@@ -28,6 +34,22 @@ export default defineConfig({
 
         return {
           code: hardenLibavoidForTrustedTypes(source),
+          map: null,
+        };
+      },
+    },
+    {
+      // Chromium reads woff2; drop KaTeX's woff and ttf fallbacks.
+      name: "katex-woff2-only",
+      enforce: "pre",
+      transform(source, moduleId) {
+        if (!/[/\\]katex[/\\]dist[/\\]katex\.css$/.test(moduleId)) return;
+
+        return {
+          code: source.replaceAll(
+            /, url\([^)]+\) format\("(?:woff|truetype)"\)/g,
+            "",
+          ),
           map: null,
         };
       },
@@ -54,6 +76,7 @@ export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
     alias: {
+      ...sourceAliases,
       "decode-named-character-reference": decodeNamedCharacterReferenceIndex,
     },
   },
@@ -63,6 +86,8 @@ export default defineConfig({
   // file, not the `vscode-file://vscode-app/` root.
   base: "./",
   build: {
+    // The workbench CSP refuses `data:` fonts.
+    assetsInlineLimit: (file) => (file.endsWith(".woff2") ? false : undefined),
     copyPublicDir: false,
     emptyOutDir: true,
     manifest: true,

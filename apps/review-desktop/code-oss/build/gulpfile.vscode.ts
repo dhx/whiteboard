@@ -86,14 +86,9 @@ const vscodeResourceIncludes = [
 	'out-build/vs/workbench/contrib/terminal/common/scripts/*.psm1',
 	'out-build/vs/workbench/contrib/terminal/common/scripts/*.sh',
 	'out-build/vs/workbench/contrib/terminal/common/scripts/*.zsh',
-	'out-build/vs/workbench/contrib/terminal/common/scripts/psreadline/**',
 
 	// Accessibility Signals
 	'out-build/vs/platform/accessibilitySignal/browser/media/*.mp3',
-
-	// Welcome
-	'out-build/vs/workbench/contrib/welcomeGettingStarted/common/media/**/*.{svg,png}',
-	'out-build/vs/workbench/contrib/welcomeOnboarding/browser/media/*.svg',
 
 	// Extensions
 	'out-build/vs/workbench/contrib/extensions/browser/media/{theme-icon.png,language-icon.svg}',
@@ -103,13 +98,7 @@ const vscodeResourceIncludes = [
 	'out-build/vs/workbench/contrib/webview/browser/pre/*.{js,html}',
 
 	// Extension Host Worker
-	'out-build/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html',
-
-	// Tree Sitter highlights
-	'out-build/vs/editor/common/languages/highlights/*.scm',
-
-	// Tree Sitter injection queries
-	'out-build/vs/editor/common/languages/injections/*.scm'
+	'out-build/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html'
 ];
 
 const vscodeResources = [
@@ -432,6 +421,10 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 				'!version',
 				...(platform === 'darwin' ? ['!**/Contents/Applications', '!**/Contents/Applications/**'] : []),
 				...(platform === 'win32' ? ['!**/electron_proxy.exe'] : []),
+				// Review's UI is English only; drop Chromium's other UI translations.
+				'!**/locales/!(en-US|en-GB).pak',
+				'!**/Electron Framework.framework/**/!(en|en_*).lproj{,/**}',
+				'!**/Contents/Resources/!(en).lproj{,/**}',
 			], { dot: true }));
 
 		if (platform === 'linux') {
@@ -486,7 +479,9 @@ function packageTask(platform: string, arch: string, sourceFolderName: string, d
 			result = es.merge(result, gulp.src('.build/policies/win32/**', { base: '.build/policies/win32' })
 				.pipe(rename(f => f.dirname = `policies/${f.dirname}`)));
 
-			if (quality === 'stable' || quality === 'insider') {
+			// AppX packaging is an optional Windows integration. Products without
+			// context-menu metadata do not build its package or explorer DLL.
+			if ((quality === 'stable' || quality === 'insider') && 'win32ContextMenu' in product) {
 				result = es.merge(result, gulp.src('.build/win32/appx/**', { base: '.build/win32' }));
 				const rawVersion = version.replace(/-\w+$/, '').split('.');
 				const appxVersion = `${rawVersion[0]}.0.${rawVersion[1]}.${rawVersion[2]}`;

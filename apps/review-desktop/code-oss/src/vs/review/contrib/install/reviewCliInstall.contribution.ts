@@ -4,13 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { isCancellationError } from "../../../base/common/errors.js";
-import { isLinux, isMacintosh } from "../../../base/common/platform.js";
+import { isLinux, isMacintosh, isWindows } from "../../../base/common/platform.js";
 import { localize, localize2 } from "../../../nls.js";
 import { Action2, registerAction2 } from "../../../platform/actions/common/actions.js";
 import { IDialogService } from "../../../platform/dialogs/common/dialogs.js";
 import type { ServicesAccessor } from "../../../platform/instantiation/common/instantiation.js";
 import { INativeHostService } from "../../../platform/native/common/native.js";
 import { INotificationService } from "../../../platform/notification/common/notification.js";
+import { IProductService } from "../../../platform/product/common/productService.js";
 import { Registry } from "../../../platform/registry/common/platform.js";
 import { IStorageService, StorageScope } from "../../../platform/storage/common/storage.js";
 import {
@@ -134,6 +135,7 @@ class UninstallReviewDesktopAction extends Action2 {
 	override async run(accessor: ServicesAccessor): Promise<void> {
 		const dialogService = accessor.get(IDialogService);
 		const environmentService = accessor.get(INativeWorkbenchEnvironmentService);
+		const productService = accessor.get(IProductService);
 		const nativeHostService = accessor.get(INativeHostService);
 		const desktopConnection = accessor.get(IReviewDesktopConnectionService);
 		const storageService = accessor.get(IStorageService);
@@ -191,11 +193,29 @@ class UninstallReviewDesktopAction extends Action2 {
 		}
 
 		if (isLinux) {
+			const preview = productService.quality === "preview";
 			await dialogService.info(
 				localize("review.uninstall.linuxDone", "Whiteboard’s user-installed integrations were removed."),
+				preview
+					? localize(
+						"review.uninstall.linuxFinishPreview",
+						"To remove the app, quit Whiteboard and run sudo apt remove whiteboard-preview on Ubuntu, sudo dnf remove whiteboard-preview on Fedora, or sudo pacman -R whiteboard-preview on Arch. Your sessions and settings stay on disk.",
+					)
+					: localize(
+						"review.uninstall.linuxFinish",
+						"To remove the app, quit Whiteboard and run sudo apt remove whiteboard on Ubuntu, sudo dnf remove whiteboard on Fedora, or sudo pacman -R whiteboard on Arch. Your sessions and settings stay on disk.",
+					),
+			);
+			return;
+		}
+
+		if (isWindows && environmentService.isBuilt) {
+			await dialogService.info(
+				localize("review.uninstall.done", "Whiteboard's command and trace setup were removed."),
 				localize(
-					"review.uninstall.linuxFinish",
-					"To remove the app, quit Whiteboard and run sudo apt remove dev-fast-review on Ubuntu, or sudo pacman -R dev-fast-review on Omarchy / Arch. Your sessions and settings stay on disk.",
+					"review.uninstall.windowsFinish",
+					"To remove the app, quit Whiteboard and uninstall {0} from Settings > Apps > Installed apps. Your sessions and settings stay on disk.",
+					productService.nameLong,
 				),
 			);
 			return;
@@ -280,8 +300,6 @@ class ReviewCliInstallStartup implements IWorkbenchContribution {
 					shim: true,
 					autoUpdate: true,
 				});
-				// Review has no status bar; status() messages would be dropped.
-				this.notificationService.info(localize("review.cliInstall.resyncedCli", "Whiteboard updated the installed CLI."));
 				return;
 			case "none":
 				return;

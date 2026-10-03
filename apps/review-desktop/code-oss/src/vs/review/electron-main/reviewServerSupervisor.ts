@@ -6,7 +6,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DeferredPromise, timeout } from "../../base/common/async.js";
+import { DeferredPromise, TimeoutTimer } from "../../base/common/async.js";
 import { Event } from "../../base/common/event.js";
 import {
   Disposable,
@@ -21,7 +21,10 @@ import {
   type ReviewServerAnnouncement,
   resolveReviewServerEntry,
 } from "../common/reviewDesktopBootstrap.js";
-import { REVIEW_SERVER_RESTART_DELAYS } from "../common/reviewReconnect.js";
+import {
+  REVIEW_SERVER_RESTART_DELAYS,
+  REVIEW_SERVER_STARTUP_TIMEOUT_MS,
+} from "../common/reviewReconnect.js";
 import { uuidV7 } from "../common/reviewUuidV7.js";
 
 /**
@@ -119,7 +122,7 @@ export function createReviewServerEnvironment(options: {
       ? undefined
       : "1",
     // The app's own Electron binary doubles as the CLI's Node runtime
-    // (ELECTRON_RUN_AS_NODE), so an installed `review` command never
+    // (ELECTRON_RUN_AS_NODE), so an installed `whiteboard` command never
     // depends on a system Node.
     DEV_FAST_REVIEW_CLI_RUNTIME: process.execPath,
     DEV_FAST_REVIEW_RUST_ANALYZER: options.rustAnalyzerSource,
@@ -230,10 +233,11 @@ export class ReviewServerSupervisor extends Disposable {
 
   private readonly connected = new DeferredPromise<ReviewDesktopConnection>();
   private readonly readyTimeout: number;
+  private readonly readyTimer = this._register(new TimeoutTimer());
 
   constructor(private readonly options: ReviewServerSupervisorOptions) {
     super();
-    this.readyTimeout = options.readyTimeout ?? 30_000;
+    this.readyTimeout = options.readyTimeout ?? REVIEW_SERVER_STARTUP_TIMEOUT_MS;
     this.telemetryEnabled = options.telemetryEnabled !== false;
   }
 
@@ -326,6 +330,7 @@ export class ReviewServerSupervisor extends Disposable {
           appSessionId: this.appSessionId,
         };
         ready = true;
+        this.readyTimer.cancel();
         this.port = Number(new URL(connection.url).port);
         this.restartCount = 0;
         if (!this.connected.isSettled) {
@@ -421,21 +426,19 @@ export class ReviewServerSupervisor extends Disposable {
     if (!this.connected.isSettled) this.armReadyTimeout();
   }
 
-  private readyTimeoutEpoch = 0;
-
   private armReadyTimeout(): void {
-    const epoch = ++this.readyTimeoutEpoch;
-    void timeout(this.readyTimeout).then(() => {
-      if (epoch !== this.readyTimeoutEpoch || this.stopping || this.connected.isSettled) return;
+    if (this.stopping || this.connected.isSettled) return;
+    this.readyTimer.cancelAndSet(() => {
       this.failStartup(
         new Error(
           `The Review server did not become ready within ${this.readyTimeout}ms.`,
         ),
       );
-    });
+    }, this.readyTimeout);
   }
 
   private failStartup(error: unknown): void {
+    this.readyTimer.cancel();
     const reason = error instanceof Error ? error : new Error(String(error));
     this.options.logError(`[Review Desktop] ${reason.message}`);
     if (!this.connected.isSettled) this.connected.error(reason);
@@ -444,28 +447,21 @@ export class ReviewServerSupervisor extends Disposable {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    this.readyTimer.cancel();
     if (this.restartTimer) clearTimeout(this.restartTimer);
     const serverProcess = this.serverProcess;
     if (!serverProcess) return;
-    serverProcess.postMessage({ type: "shutdown" });
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        const store = new DisposableStore();
-        store.add(
-          serverProcess.onExit(() => {
-            store.dispose();
-            resolve();
-          }),
-        );
-        store.add(
-          serverProcess.onCrash(() => {
-            store.dispose();
-            resolve();
-          }),
-        );
-      }),
-      timeout(2_000),
-    ]);
+    const store = new DisposableStore();
+    try {
+      await new Promise<void>((resolve) => {
+        store.add(serverProcess.onExit(() => resolve()));
+        store.add(serverProcess.onCrash(() => resolve()));
+        store.add(new TimeoutTimer(resolve, 2_000));
+        serverProcess.postMessage({ type: "shutdown" });
+      });
+    } finally {
+      store.dispose();
+    }
     serverProcess.kill();
     this.processListeners.dispose();
     this.serverProcess = undefined;

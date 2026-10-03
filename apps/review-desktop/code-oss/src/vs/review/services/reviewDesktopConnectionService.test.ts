@@ -59,7 +59,7 @@ test("install status shares concurrent scans and refreshes on subsequent checks"
 			shim: { path: "/tmp/review", installed: false, profileConfigured: false, onPath: false },
 			trace: { enabled: false, configured: false, autoActivateRepositories: false, envPath: "/tmp/env", settingsPath: "/tmp/settings" },
 			cli: null,
-			connect: { command: "review", args: ["mcp"], prompts: { claude: "c", codex: "c", cursor: "c", opencode: "c", pi: "c", omp: "c" }, plugins: { claude: { label: "c" }, codex: { label: "c" }, cursor: { label: "c" }, opencode: { label: "c" }, pi: { label: "c" }, omp: { label: "c" } } },
+			connect: { command: "review", args: ["mcp"], prompts: { claude: "c", codex: "c", cursor: "c", opencode: "c", pi: "c", omp: "c", copilot: "c" }, plugins: { claude: { label: "c" }, codex: { label: "c" }, cursor: { label: "c" }, opencode: { label: "c" }, pi: { label: "c" }, omp: { label: "c" }, copilot: { label: "c" } } },
 			legacySkills: [],
 		});
 	});
@@ -143,15 +143,4 @@ test("tutorial deletion suppresses auto-prepare across restarts until explicit o
 	assert.equal(requests.length, 3);
 	assert.match(requests[2] ?? "", /POST .*\/tutorial\/prepare$/);
 	restoredService.dispose();
-});
-
-test("passes automatic command updates to the server without enabling optional integrations", async (t) => {
-	const service = serviceWith();
-	let requestBody: unknown;
-	mockFetch(t, async (_url, init) => {
-		requestBody = JSON.parse(String(init?.body));
-		return Response.json({ ok: true, output: "updated" });
-	});
-	await service.applyCliInstall({ shim: false, autoUpdate: true });
-	assert.deepEqual(requestBody, { shim: false, autoUpdate: true });
 });

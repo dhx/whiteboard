@@ -7,9 +7,9 @@
   <h1>Whiteboard</h1>
   <p><strong>an open-source canvas for thoughtful software design</strong></p>
   <p>
-    <a href="https://install.dev.fast">Download for macOS</a> ·
-    <a href="https://install.dev.fast/linux">Download for Fedora</a> ·
+    <a href="https://dev.fast/install">Download for macOS, Windows, and Linux</a> ·
     <a href="https://dev.fast">Website</a> ·
+    <a href="https://github.com/devdotfast/whiteboard/wiki/Roadmap">Roadmap</a> ·
     <a href="https://discord.gg/wYvd2cpMQg">Discord</a>
   </p>
 </div>
@@ -20,7 +20,7 @@ Whiteboard plugs into the tools you already use - e.g. Claude Code, Codex, etc. 
 
 <p align="center">
   <img
-    src="docs/assets/whiteboard-demo.gif"
+    src=".github/assets/whiteboard-demo.gif"
     width="880"
     alt="An agent writes a Whiteboard review from a terminal prompt, which includes a sequence diagram"
   />
@@ -30,7 +30,7 @@ Here’s a 1 min demo video explaining more: https://www.youtube.com/watch?v=ChP
 
 ## Quickstart
 
-1. [Download Whiteboard](https://install.dev.fast) and open the app.
+1. [Download Whiteboard](https://dev.fast/install) and open the app.
 2. Connect Claude Code, Codex, or another coding agent from the welcome screen.
 3. Ask your agent to review your current branch against up-to-date main and
    open the result in Whiteboard.
@@ -55,7 +55,7 @@ Here are a few example prompts of how to use Whiteboard effectively. We are work
 
 ### For a change to add telemetry:
 
-> cna you explain to me the telemetry changes form the newest posthog pr https://github.com/devdotfast/whiteboard/commit/4837e107946e27ebad50c282eb0f2585210d2a35 -- what are we tracking, how can we build good dashboards or product waterfalls from it? what do we do for hangs, errors, crashes etc... use whiteboard
+> Can you explain to me the telemetry changes form the newest posthog pr https://github.com/devdotfast/whiteboard/commit/4837e107946e27ebad50c282eb0f2585210d2a35 -- what are we tracking, how can we build good dashboards or product waterfalls from it? what do we do for hangs, errors, crashes etc... use whiteboard
 
 If you see anything you don't like, highlight it in your clipboard and give it your agent, and it can re-draw on the Whiteboard to suit your needs!
 

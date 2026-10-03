@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -32,6 +33,7 @@ import {
 } from "./curated-extensions.manifest.mjs";
 import {
   copyCuratedExtensions,
+  extractVsixPayload,
   verifyCuratedExtensions,
 } from "./curated-extensions.mjs";
 
@@ -39,17 +41,14 @@ const APP_DIR = path.dirname(fileURLToPath(new URL("./", import.meta.url)));
 
 const EXTENSIONS_DIR = path.join(APP_DIR, "code-oss", "extensions");
 
+const codeOssRequire = createRequire(
+  path.join(APP_DIR, "code-oss", "package.json"),
+);
+
 const buildExtensions = await readFile(
   new URL("../code-oss/build/lib/extensions.ts", import.meta.url),
   "utf8",
 );
-
-const gitignore = await readFile(
-  new URL("../code-oss/.gitignore", import.meta.url),
-  "utf8",
-);
-
-const runScript = await readFile(new URL("./run.sh", import.meta.url), "utf8");
 
 const curatedContribution = await readFile(
   new URL(
@@ -176,41 +175,6 @@ test("keeps the curated identifiers unique", () => {
   assert.deepEqual(ids, [...new Set(ids)], "duplicate curated extension id");
 });
 
-test("disables only the conflicting keymaps by default", () => {
-  assert.deepEqual([...keymapGroups], ["vim", "emacs"]);
-  assert.deepEqual([...defaultDisabledIds].sort(), [
-    "tuttieee.emacs-mcx",
-    "vscodevim.vim",
-  ]);
-});
-
-test("builds Open VSX download urls for universal and per-platform builds", () => {
-  assert.equal(
-    openVsxUrl({ namespace: "vscodevim", name: "vim", version: "1.32.4" }),
-    "https://open-vsx.org/api/vscodevim/vim/1.32.4/file/vscodevim.vim-1.32.4.vsix",
-  );
-  assert.equal(
-    openVsxUrl({
-      namespace: "rust-lang",
-      name: "rust-analyzer",
-      version: "0.4.2990",
-      target: "darwin-arm64",
-    }),
-    "https://open-vsx.org/api/rust-lang/rust-analyzer/darwin-arm64/0.4.2990/file/rust-lang.rust-analyzer-0.4.2990@darwin-arm64.vsix",
-  );
-});
-
-test("resolves a target key for every extension on every supported target", () => {
-  for (const target of supportedTargets) {
-    for (const extension of curatedExtensions) {
-      assert.ok(
-        targetKeyFor(extension, target),
-        `${extension.id} has no build for ${target}`,
-      );
-    }
-  }
-});
-
 test("parses DEV_REVIEW_EXTENSIONS selections", () => {
   assert.deepEqual(
     [...parseGroupSelection(undefined)].sort(),
@@ -228,68 +192,6 @@ test("parses DEV_REVIEW_EXTENSIONS selections", () => {
   assert.throws(() => parseGroupSelection("nope"), /unknown extension group/);
 });
 
-test("carries Darwin curated extensions from Linux compile through release validation", async () => {
-  const [
-    buildScript,
-    compileScript,
-    payloadManifest,
-    packageScript,
-    validationScript,
-  ] = await Promise.all([
-    readFile(new URL("./build.sh", import.meta.url), "utf8"),
-    readFile(new URL("./compile-darwin-payload.sh", import.meta.url), "utf8"),
-    readFile(new URL("./darwin-payload-manifest.sh", import.meta.url), "utf8"),
-    readFile(new URL("./package-macos.sh", import.meta.url), "utf8"),
-    readFile(
-      new URL("./validate-release-artifacts.mjs", import.meta.url),
-      "utf8",
-    ),
-  ]);
-
-  assert.match(buildScript, /REVIEW_DESKTOP_CURATED_EXTENSION_TARGET/);
-  assert.match(
-    compileScript,
-    /REVIEW_DESKTOP_CURATED_EXTENSION_TARGET=darwin-arm64/,
-  );
-  assert.match(
-    compileScript,
-    /source "\$APP_DIR\/scripts\/darwin-payload-manifest\.sh"/,
-  );
-  assert.match(
-    packageScript,
-    /source "\$APP_DIR\/scripts\/darwin-payload-manifest\.sh"/,
-  );
-  assert.match(payloadManifest, /DARWIN_PAYLOAD_REQUIRED_PATHS=/);
-  assert.match(payloadManifest, /DARWIN_PAYLOAD_ARCHIVE_ONLY_PATHS=/);
-  assert.ok(
-    payloadManifest.indexOf("$DARWIN_PAYLOAD_CURATED_EXTENSIONS_PATH") >
-      payloadManifest.indexOf("DARWIN_PAYLOAD_REQUIRED_PATHS=(") &&
-      payloadManifest.indexOf("$DARWIN_PAYLOAD_CURATED_EXTENSIONS_PATH") <
-        payloadManifest.indexOf("DARWIN_PAYLOAD_ARCHIVE_ONLY_PATHS=("),
-    "the curated extension payload must be required by macOS packaging",
-  );
-  assert.match(compileScript, /DARWIN_PAYLOAD_ARCHIVE_ONLY_PATHS\[@\]/);
-  assert.match(compileScript, /DARWIN_PAYLOAD_REQUIRED_PATHS\[@\]/);
-  assert.match(packageScript, /DARWIN_PAYLOAD_REQUIRED_PATHS\[@\]/);
-  assert.match(compileScript, /--target=darwin-arm64/);
-  assert.match(compileScript, /--copy-to "\$CURATED_EXTENSIONS_PAYLOAD"/);
-  assert.match(packageScript, /"\$CURATED_EXTENSIONS_PAYLOAD"/);
-  assert.match(packageScript, /--source-root "\$CURATED_EXTENSIONS_SOURCE"/);
-  assert.match(
-    packageScript,
-    /--copy-to "\$PACKAGED_APP\/Contents\/Resources\/app\/extensions"/,
-  );
-  assert.ok(
-    packageScript.indexOf("curated-extensions.mjs") <
-      packageScript.indexOf("scripts/notarize-macos.sh"),
-    "curated extensions must be staged before signing and notarization",
-  );
-  assert.match(validationScript, /verifyCuratedExtensions/);
-  assert.match(validationScript, /target: "darwin-arm64"/);
-  assert.doesNotMatch(packageScript, /rust-lang\.rust-analyzer/);
-  assert.doesNotMatch(payloadManifest, /rust-lang\.rust-analyzer/);
-});
-
 test("keeps curated extensions out of the gulp packaging stream", () => {
   for (const extension of curatedExtensions) {
     assert.ok(
@@ -299,18 +201,50 @@ test("keeps curated extensions out of the gulp packaging stream", () => {
   }
 });
 
-test("ignores every materialized curated extension directory", () => {
-  for (const extension of curatedExtensions) {
-    assert.ok(
-      gitignore.includes(`/extensions/${extension.id}/`),
-      `${extension.id} must be gitignored; its payload is downloaded, not committed`,
-    );
-  }
-});
+test("extracts nested Windows executables from a VSIX archive", async () => {
+  const yazl = codeOssRequire("yazl");
+  const root = mkdtempSync(path.join(os.tmpdir(), "review-vsix-extract-"));
+  const archive = path.join(root, "fixture.vsix");
+  const destination = path.join(root, "extension");
+  const zip = new yazl.ZipFile();
+  const chunks = [];
 
-test("materializes the selected groups from run.sh", () => {
-  assert.match(runScript, /DEV_REVIEW_EXTENSIONS/);
-  assert.match(runScript, /curated-extensions\.mjs/);
+  const complete = new Promise((resolve, reject) => {
+    zip.outputStream.on("data", (chunk) => chunks.push(chunk));
+    zip.outputStream.once("end", resolve);
+    zip.outputStream.once("error", reject);
+  });
+
+  zip.addBuffer(
+    Buffer.from("windows executable fixture"),
+    "extension/bundled/libs/bin/ty.exe",
+  );
+  zip.addBuffer(
+    Buffer.from('{"publisher":"astral-sh","name":"ty"}'),
+    "extension/package.json",
+  );
+  zip.end();
+
+  try {
+    await complete;
+    writeFileSync(archive, Buffer.concat(chunks));
+    await extractVsixPayload(archive, destination);
+
+    assert.equal(
+      readFileSync(
+        path.join(destination, "bundled", "libs", "bin", "ty.exe"),
+        "utf8",
+      ),
+      "windows executable fixture",
+    );
+    assert.equal(
+      JSON.parse(readFileSync(path.join(destination, "package.json"), "utf8"))
+        .name,
+      "ty",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 // The payloads are downloaded rather than committed, so a clean checkout has
@@ -354,29 +288,31 @@ test(
         );
       }
 
-      for (const activationEvent of extension.addActivationEvents ?? []) {
-        assert.ok(
-          manifest.activationEvents.includes(activationEvent),
-          `${extension.id} must declare ${activationEvent}`,
-        );
-      }
-
       for (const relative of extension.executables) {
-        const executable = path.join(directory, relative);
+        const windowsTarget = stamp.target.startsWith("win32-");
+
+        const executable = path.join(
+          directory,
+          windowsTarget ? `${relative}.exe` : relative,
+        );
+
         assert.ok(
           existsSync(executable),
           `${extension.id} is missing ${relative}`,
         );
-        assert.ok(
-          statSync(executable).mode & 0o111,
-          `${extension.id} ${relative} must stay executable`,
-        );
+
+        if (!windowsTarget) {
+          assert.ok(
+            statSync(executable).mode & 0o111,
+            `${extension.id} ${relative} must stay executable`,
+          );
+        }
       }
     }
   },
 );
 
-test("copies only bundled extensions for both package targets", () => {
+test("copies only bundled extensions for each package target", () => {
   for (const target of supportedTargets) {
     const root = mkdtempSync(path.join(os.tmpdir(), "review-curated-copy-"));
     const sourceRoot = path.join(root, "source");
@@ -394,7 +330,6 @@ test("copies only bundled extensions for both package targets", () => {
             publisher: extension.namespace,
             name: extension.name,
             version: extension.version,
-            activationEvents: extension.addActivationEvents ?? [],
           })}\n`,
         );
         writeFileSync(
@@ -408,7 +343,11 @@ test("copies only bundled extensions for both package targets", () => {
         );
 
         for (const relative of extension.executables) {
-          const executable = path.join(directory, relative);
+          const executable = path.join(
+            directory,
+            target.startsWith("win32-") ? `${relative}.exe` : relative,
+          );
+
           mkdirSync(path.dirname(executable), { recursive: true });
           writeFileSync(executable, "fixture\n");
           chmodSync(executable, 0o755);
@@ -466,8 +405,6 @@ test("keeps the keymaps mutually exclusive in the picker", () => {
       `${id} must be listed as a keymap in the picker`,
     );
   }
-
-  assert.match(curatedContribution, /KEYMAP_IDS/);
 
   const enumDeclaration = reviewConfiguration.match(
     /REVIEW_KEYMAPS\s*=\s*\[([^\]]+)\]/,

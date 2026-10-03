@@ -1,5 +1,5 @@
-import { existsSync, rmSync } from "node:fs";
-import { mkdir, rm, rmdir } from "node:fs/promises";
+import { existsSync, realpathSync, rmSync } from "node:fs";
+import { lstat, mkdir, readdir, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -8,7 +8,7 @@ import {
   jjRevisionIsConflicted,
   resolveRevision,
 } from "@dev.fast/local-vcs";
-import { withFileLock } from "@dev.fast/trace-core";
+import { errorMessage, withFileLock } from "@dev.fast/trace-core";
 
 import {
   type ReviewCheckoutRole,
@@ -101,7 +101,7 @@ async function materializeReviewPinnedCheckout(input: {
   // of code — and the graph would index that. Refuse with the remedy instead.
   if (await jjRevisionIsConflicted(input.rootPath, input.commit)) {
     throw new Error(
-      `Review cannot pin conflicted revision ${input.commit.slice(0, 12)}: the jj change has unresolved conflicts. Resolve them (jj resolve), then re-pin the review.`,
+      `Whiteboard cannot pin conflicted revision ${input.commit.slice(0, 12)}: the jj change has unresolved conflicts. Resolve them (jj resolve), then re-pin the review.`,
     );
   }
 
@@ -124,66 +124,86 @@ async function materializeReviewPinnedCheckout(input: {
   ]);
 }
 
-// Remove one review's pinned checkout — and only that: the path must lie
-// under the dev-fast worktrees dir, so checkouts for other concurrent reviews
-// (and anything else on disk) are never touched. Returns whether a checkout
-// was actually removed.
-export async function removeReviewPinnedCheckout(input: {
-  rootPath: string;
-  reviewUuid: string;
-  checkoutPath: string;
-}): Promise<boolean> {
-  const commonDir = await gitCommonDir(input.rootPath);
+/**
+ * Remove every checkout one Review owns in a repository. Registrations go
+ * first, so an interrupted removal cannot leave a gutted tree that git still
+ * lists and a later ensure would reuse; an unregistered leftover is replaced
+ * by the next ensure. Each checkout is removed on its own, so one that cannot
+ * be deleted leaves the others removed; the error names every failure.
+ */
+export async function removeReviewManagedCheckouts(
+  commonDir: string,
+  reviewUuid: string,
+): Promise<void> {
+  const root = reviewManagedCheckoutRoot(commonDir, reviewUuid);
 
-  if (!commonDir) return false;
-  const target = path.resolve(input.checkoutPath);
+  if (!isInsideDirectory(root, reviewManagedCheckoutsDir(commonDir)))
+    throw new Error(`Refusing to remove non-managed checkouts at ${root}.`);
 
-  if (
-    !isInsideDirectory(
-      target,
-      reviewManagedCheckoutRoot(commonDir, input.reviewUuid),
-    )
-  ) {
-    return false;
-  }
+  // Resolve symlinks above the root (say /tmp) only; never the root itself.
+  const roots = [
+    root,
+    path.join(realPath(path.dirname(root)), path.basename(root)),
+  ];
 
-  const existed = existsSync(target);
-  await git(input.rootPath, ["worktree", "remove", "--force", target], {
-    allowFailure: true,
-  });
-  await git(input.rootPath, ["worktree", "prune"], { allowFailure: true });
-  rmSync(target, { recursive: true, force: true });
-  await removeReviewPrepareArtifacts(target);
+  const errors: string[] = [];
+  // A checkout git refused to remove (say, locked) stays registered and whole.
+  const kept = new Set<string>();
 
-  return existed;
-}
+  const attempt = (work: Promise<unknown>) =>
+    work.then(
+      () => true,
+      (error) => {
+        errors.push(errorMessage(error));
 
-/** Remove all persistent checkouts for one deleted Review. */
-export async function removeReviewManagedCheckouts(input: {
-  rootPath: string;
-  reviewUuid: string;
-}): Promise<number> {
-  const commonDir = await gitCommonDir(input.rootPath);
-
-  if (!commonDir) return 0;
-  const reviewRoot = reviewManagedCheckoutRoot(commonDir, input.reviewUuid);
-  const worktrees = await listRegisteredWorktrees(input.rootPath);
-  let removed = 0;
-
-  for (const worktree of worktrees) {
-    if (!isInsideDirectory(worktree.worktreePath, reviewRoot)) continue;
-    await git(
-      input.rootPath,
-      ["worktree", "remove", "--force", worktree.worktreePath],
-      { allowFailure: true },
+        return false;
+      },
     );
-    removed += 1;
+
+  for (const worktree of await listRegisteredWorktrees(commonDir))
+    if (
+      roots.some((dir) => isInsideDirectory(worktree.worktreePath, dir)) &&
+      !(await attempt(
+        git(commonDir, [
+          "worktree",
+          "remove",
+          "--force",
+          worktree.worktreePath,
+        ]),
+      ))
+    )
+      kept.add(realPath(worktree.worktreePath));
+
+  // Descend only into real directories. rm removes a symlink itself, never
+  // what it points to, so nothing outside the root is touched.
+  const entries = async (dir: string) =>
+    (await lstat(dir).catch(() => null))?.isDirectory()
+      ? await readdir(dir, { withFileTypes: true })
+      : [];
+
+  for (const entry of await entries(root)) {
+    const dir = path.join(root, entry.name);
+
+    // base/<commit> and head/<commit> are checkouts; anything else (the
+    // navigator workspaces) goes whole.
+    const checkouts =
+      entry.isDirectory() && (entry.name === "base" || entry.name === "head")
+        ? (await entries(dir)).map((child) => path.join(dir, child.name))
+        : [dir];
+
+    for (const checkout of checkouts)
+      if (
+        !kept.has(
+          path.join(realPath(path.dirname(checkout)), path.basename(checkout)),
+        )
+      )
+        await attempt(rm(checkout, { recursive: true, force: true }));
   }
 
-  await git(input.rootPath, ["worktree", "prune"], { allowFailure: true });
-  await rm(reviewRoot, { recursive: true, force: true });
+  if (!errors.length) await rm(root, { recursive: true, force: true });
+  await git(commonDir, ["worktree", "prune"], { allowFailure: true });
 
-  return removed;
+  if (errors.length) throw new Error(errors.join("\n"));
 }
 
 /** Remove commit-owned checkouts from releases before Review ownership. */
@@ -245,34 +265,6 @@ export async function removeLegacyReviewCheckouts(input: {
   });
 
   return removed;
-}
-
-/** Infer the owning Review from any path inside its managed checkout. */
-export async function reviewUuidForManagedCheckout(
-  cwd: string,
-): Promise<string | null> {
-  const commonDir = await gitCommonDir(cwd).catch(() => null);
-
-  if (!commonDir) return null;
-
-  const relative = path.relative(
-    reviewManagedCheckoutsDir(commonDir),
-    path.resolve(cwd),
-  );
-
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return null;
-  }
-
-  const [reviewUuid, role, commit] = relative.split(path.sep);
-
-  if (!reviewUuid || !isReviewUuid(reviewUuid)) return null;
-
-  if (role !== "head" && role !== "base") return null;
-
-  if (!commit) return null;
-
-  return reviewUuid;
 }
 
 // Resolve a pinned ref to a commit. Prefer the jj-first local-vcs
@@ -371,10 +363,8 @@ function isManagedLegacyReviewWorktree(
   return worktree.headCommit?.startsWith(relative.toLowerCase()) ?? false;
 }
 
-function isReviewUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    value,
-  );
+function realPath(filePath: string): string {
+  return existsSync(filePath) ? realpathSync(filePath) : path.resolve(filePath);
 }
 
 function isInsideDirectory(filePath: string, directory: string): boolean {

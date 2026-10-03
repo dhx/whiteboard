@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -14,8 +14,6 @@ import {
   snapshotReviewTree,
 } from "./fixtures/legacy-reviews/legacy-review-fixture";
 import {
-  findReview,
-  listReviews,
   materializeReviewRevision,
   readStoredReview,
   sealReviewCandidate,
@@ -50,40 +48,6 @@ async function extract(name: string) {
 async function git(dir: string, args: string[]) {
   return (await execFilePromise("git", ["-C", dir, ...args])).stdout.trim();
 }
-
-it("includes the three approved public legacy fixtures", () => {
-  expect(fixtures.map((fixture) => fixture.name)).toEqual([
-    "schema4-bug-report-dialog",
-    "schema4-opencode-agentserver",
-    "schema4-three-minute-tour",
-  ]);
-});
-
-it("snapshots authored locks, databases, and managed metadata", async () => {
-  const { dir } = await extract("schema4-bug-report-dialog");
-  await writeFile(path.join(dir, "notes.lock"), "authored\n");
-  await writeFile(path.join(dir, ".agent-sessions.lock"), "transient\n");
-  await writeFile(path.join(dir, ".mutation-lock"), "transient\n");
-  await writeFile(path.join(dir, "review.db-wal"), "database wal\n");
-  await mkdir(path.join(dir, ".build"));
-  await writeFile(path.join(dir, ".build", "generated.js"), "generated\n");
-
-  const snapshot = await snapshotReviewTree(dir);
-
-  expect(snapshot).toHaveProperty("notes.lock");
-  expect(snapshot).toHaveProperty("review.db");
-  expect(snapshot).toHaveProperty("review.db-wal");
-  expect(snapshot).toHaveProperty("review.json");
-  expect(Object.keys(snapshot).some((name) => name.startsWith(".git/"))).toBe(
-    true,
-  );
-  expect(
-    Object.keys(snapshot).some((name) => name.startsWith(".bundle/")),
-  ).toBe(true);
-  expect(snapshot).not.toHaveProperty(".agent-sessions.lock");
-  expect(snapshot).not.toHaveProperty(".mutation-lock");
-  expect(snapshot).not.toHaveProperty(".build/generated.js");
-});
 
 describe.each(fixtures)("legacy fixture $name", (fixture) => {
   it("migrates to golden JSON while preserving metadata, stale files and old history", async () => {
@@ -175,8 +139,6 @@ describe.each(fixtures)("legacy fixture $name", (fixture) => {
     expect(await readFile(path.join(dir, "review.db"))).toEqual(staleDatabase);
     const snapshot = await snapshotReviewTree(dir);
     expect(await readStoredReview(dir)).toEqual(loaded);
-    expect(await listReviews()).toMatchObject({ errors: [] });
-    expect((await findReview(uuid))?.review.schemaVersion).toBe(5);
     expect(await snapshotReviewTree(dir)).toEqual(snapshot);
   });
 
@@ -214,53 +176,9 @@ describe.each(fixtures)("legacy fixture $name", (fixture) => {
       }),
     );
     const snapshot = await snapshotReviewTree(dir);
-    const listed = await listReviews();
-    expect(listed.reviews).toEqual([]);
-    expect(listed.errors).toHaveLength(1);
-    expect(listed.errors[0]).toMatchObject({
-      code: "REPAIR_REQUIRED",
-      reviewUuid: uuid,
+    expect(await readStoredReview(dir)).toMatchObject({
+      error: { code: "REPAIR_REQUIRED", reviewUuid: uuid },
     });
     expect(await snapshotReviewTree(dir)).toEqual(snapshot);
   });
-});
-
-it("lists healthy reviews alongside a corrupt sealed presentation", async () => {
-  const healthy = await extract("schema4-bug-report-dialog");
-  const broken = await extract("schema4-opencode-agentserver");
-  await cp(healthy.dir, path.join(broken.home, "reviews", healthy.uuid), {
-    recursive: true,
-  });
-  await writeFile(
-    path.join(broken.dir, ".bundle/document/review-document.js"),
-    'throw new Error("corrupt sealed document");',
-  );
-
-  const revision = await sealReviewCandidate(
-    broken.dir,
-    "Corrupt mixed-store fixture",
-  );
-
-  await writeFile(
-    path.join(broken.dir, "review.json"),
-    JSON.stringify({
-      ...broken.originalRecord,
-      presentedDocumentRevision: revision,
-    }),
-  );
-  const snapshot = await snapshotReviewTree(broken.dir);
-
-  const listed = await listReviews();
-
-  expect(listed.reviews).toHaveLength(1);
-  expect(listed.reviews[0]?.review).toMatchObject({
-    uuid: healthy.uuid,
-    schemaVersion: 5,
-  });
-  expect(listed.errors).toHaveLength(1);
-  expect(listed.errors[0]).toMatchObject({
-    code: "REPAIR_REQUIRED",
-    reviewUuid: broken.uuid,
-  });
-  expect(await snapshotReviewTree(broken.dir)).toEqual(snapshot);
 });

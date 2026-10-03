@@ -1,6 +1,6 @@
 {
   "name": "@dev.fast/review-desktop",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -14,23 +14,27 @@
     "app:watch": "pnpm run protocol:sync && npm --prefix code-oss run watch",
     "protocol:sync": "node scripts/protocol-sync.mjs",
     "smoke:error-telemetry": "node scripts/smoke-error-telemetry.mjs",
+    "smoke:linux-ui": "node scripts/smoke-linux-ui.mjs",
     "smoke:telemetry-delivery": "node scripts/smoke-telemetry-delivery.mjs",
     "test:e2e:lsp": "node scripts/lsp-e2e.mjs",
     "test:e2e:telemetry": "node scripts/e2e/run.mjs --journey telemetry-contract --runtime \"${REVIEW_E2E_RUNTIME:?stage a runtime, see scripts/e2e/TESTING.md}\"",
     "pretest": "pnpm run protocol:sync",
     "test": "node --test \"scripts/**/*.test.mjs\" && TSX_TSCONFIG_PATH=tsconfig.test.json node --import tsx --test \"code-oss/src/vs/review/**/*.test.ts\"",
     "pretypecheck": "pnpm run protocol:sync",
-    "typecheck": "npm --prefix code-oss run typecheck-client"
+    "typecheck": "npm --prefix code-oss run typecheck-client",
+    "app:package:windows": "bash scripts/package-windows.sh"
   },
   "dependencies": {
     "@dev.fast/review": "workspace:*",
     "@dev.fast/review-protocol": "workspace:*"
   },
   "devDependencies": {
+    "@dev.fast/diffr": "0.1.10",
     "@dev.fast/review-canvas": "workspace:*",
     "@types/node": "24.12.2",
     "jsdom": "29.1.1",
     "playwright": "1.62.1",
+    "playwright-core": "1.62.1",
     "tsx": "4.21.0",
     "typescript": "6.0.3"
   },

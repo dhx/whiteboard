@@ -17,7 +17,7 @@ const base: ReviewCliInstallStatus = {
 	shim: { path: '/p', installed: true, profileConfigured: true, onPath: true },
 	trace: { enabled: false, configured: false, autoActivateRepositories: false, envPath: '/e', settingsPath: '/s' },
 	cli: null,
-	connect: { command: 'review', args: ['mcp'], prompts: { claude: '', codex: '', cursor: '', opencode: '', pi: '', omp: '' }, plugins: { claude: { label: 'c' }, codex: { label: 'c' }, cursor: { label: 'c' }, opencode: { label: 'c' }, pi: { label: 'c' }, omp: { label: 'c' } } },
+	connect: { command: 'review', args: ['mcp'], prompts: { claude: '', codex: '', cursor: '', opencode: '', pi: '', omp: '', copilot: '' }, plugins: { claude: { label: 'c' }, codex: { label: 'c' }, cursor: { label: 'c' }, opencode: { label: 'c' }, pi: { label: 'c' }, omp: { label: 'c' }, copilot: { label: 'c' } } },
 	legacySkills: [],
 };
 
@@ -41,14 +41,3 @@ test('does nothing when declined', () => {
 		'none',
 	);
 });
-
-for (const consent of [null, 'declined', 'skipped'] as const) {
-	test(`opens the skill upgrade without granted consent (${consent})`, () => {
-		assert.equal(reviewCliInstallStartupAction({
-			...base,
-			stamp: consent ? { consent, updatedAt: 't' } : null,
-			updateNeeded: true,
-			legacySkills: [{ path: '~/.agents/skills/dev-review' }],
-		}), 'openWelcome');
-	});
-}

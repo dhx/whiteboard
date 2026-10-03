@@ -561,7 +561,6 @@ export class WhiteboardBridgeFactory {
 
           return { ok: true };
         case "showReviewView":
-        case "focusCanvas":
         case "focusWindow":
           return { ok: true };
         default:

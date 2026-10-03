@@ -8,10 +8,10 @@ import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { ReviewServerDiscovery } from "@review/server-discovery.js";
+import { runHeadlessServer } from "@review/server/headless-host.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import type { ReviewServerDiscovery } from "../server-discovery.js";
-import { runHeadlessServer } from "../server/headless-host.js";
 import { handleReviewMcpHttpRequest } from "./mcp-http.js";
 
 let root: string;

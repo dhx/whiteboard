@@ -19,15 +19,15 @@ import {
   withFileLock,
   writePrivateJsonAtomic,
 } from "@dev.fast/trace-core";
-
-import { isMissingFileError } from "../fs-utils";
-import { openLocalReviewStore } from "../review-api/local-data";
+import { isMissingFileError } from "@review/fs-utils";
+import { openLocalReviewStore } from "@review/review-api/local-data";
 import {
   type StoredReview,
   UUID_PATTERN,
   parseAnyStoredReviewRecord,
-} from "../review-home";
-import { reviewVcs } from "../review-vcs";
+} from "@review/review-home";
+import { reviewVcs } from "@review/review-vcs";
+
 import {
   type ImportLegacyReviewInput,
   type ImportOutcome,
@@ -57,7 +57,6 @@ export interface CutoverReport {
  */
 export async function migrateJsonReviews(input: {
   home: string;
-  dryRun?: boolean;
   log?: (message: string) => void;
 }): Promise<CutoverReport> {
   await mkdir(input.home, { recursive: true, mode: 0o700 });
@@ -140,7 +139,10 @@ export async function migrateJsonReviews(input: {
         source?.close();
       }
 
-      const { store, data } = openLocalReviewStore(candidate);
+      // The staging candidate must never collect or free the real pinned checkouts.
+      const { store, data } = openLocalReviewStore(candidate, {
+        manageWorkspaces: false,
+      });
 
       try {
         for (const original of originals) {
@@ -216,7 +218,7 @@ export async function migrateJsonReviews(input: {
       await chmod(candidate, 0o600);
       await writePrivateJsonAtomic(path.join(staging, "report.json"), report);
 
-      if (report.errors.length || input.dryRun) return report;
+      if (report.errors.length) return report;
 
       // No process has opened the live store yet. Retire its checkpointed WAL
       // alongside the main file, then install the fully verified candidate.

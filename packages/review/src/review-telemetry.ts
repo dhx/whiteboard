@@ -112,11 +112,6 @@ export type ReviewCliCommandPath =
   | "instances.use"
   | "instances.clear"
   | "migrate.apply"
-  | "map.open"
-  | "map.check"
-  | "map.prune"
-  | "map.push"
-  | "map.fetch"
   | "login"
   | "logout"
   | "whoami"
@@ -482,16 +477,6 @@ export class ReviewTelemetry {
       via: call.via,
       ok: call.ok,
       duration_ms: Math.max(0, Math.round(call.durationMs)),
-    });
-  }
-
-  /**
-   * The reaper deleted a dismissed review. No reader is present, so this is a
-   * server event rather than a UI one.
-   */
-  async captureReviewReaped(input: { retentionDays: number }): Promise<void> {
-    await this.captureEvent("review_review_reaped", {
-      retention_days: input.retentionDays,
     });
   }
 
